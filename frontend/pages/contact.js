@@ -9,8 +9,8 @@ export default function Contact() {
         <h1 className="mt-4 text-3xl font-bold">Contact</h1>
         <p className="mt-4 text-sm leading-7 opacity-90">
           For support, partnerships, or legal/privacy requests, email us at
-          <a className="ml-1 font-semibold underline" href="mailto:contact@arithmo.app">
-            contact@arithmo.app
+          <a className="ml-1 font-semibold underline" href="mailto:astitvapandey1203@gmail.com">
+            astitvapandey1203@gmail.com
           </a>
           .
         </p>
