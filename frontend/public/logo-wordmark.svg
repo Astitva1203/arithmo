@@ -1,0 +1,14 @@
+<svg width="460" height="96" viewBox="0 0 460 96" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="w" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#67e8f9"/>
+      <stop offset="50%" stop-color="#a78bfa"/>
+      <stop offset="100%" stop-color="#34d399"/>
+    </linearGradient>
+  </defs>
+  <rect x="1" y="1" width="458" height="94" rx="22" fill="rgba(255,255,255,0.2)" stroke="rgba(255,255,255,0.5)"/>
+  <g transform="translate(20,16)">
+    <path d="M0 58 L22 8 L44 58 M7 38 H37" stroke="url(#w)" stroke-width="8" fill="none" stroke-linecap="round"/>
+  </g>
+  <text x="78" y="61" font-size="44" font-family="Segoe UI, Arial" font-weight="700" fill="url(#w)">Arithmo</text>
+</svg>

@@ -1,0 +1,1 @@
+self.__REACT_LOADABLE_MANIFEST="{\"pages\\\\dashboard.js -> ../components/MessageBubble\":{\"id\":\"pages\\\\dashboard.js -> ../components/MessageBubble\",\"files\":[\"static/chunks/components_MessageBubble_js.js\"]}}"
