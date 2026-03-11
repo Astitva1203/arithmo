@@ -20,12 +20,26 @@ dotenv.config();
 const app = express();
 
 const allowedOrigins = process.env.CLIENT_URL
-  ? process.env.CLIENT_URL.split(",").map((origin) => origin.trim())
+  ? process.env.CLIENT_URL.split(",").map((origin) => origin.trim().replace(/\/+$/, ""))
   : ["http://localhost:3000"];
 
 app.use(
   cors({
-    origin: allowedOrigins,
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      const normalized = origin.trim().replace(/\/+$/, "");
+      const isExplicitlyAllowed = allowedOrigins.includes(normalized);
+      let isVercelPreview = false;
+      try {
+        isVercelPreview = /\.vercel\.app$/i.test(new URL(normalized).hostname);
+      } catch {
+        isVercelPreview = false;
+      }
+      if (isExplicitlyAllowed || isVercelPreview) {
+        return callback(null, true);
+      }
+      return callback(new Error("CORS blocked for this origin"));
+    },
     credentials: true
   })
 );
