@@ -1,0 +1,25 @@
+{
+  "name": "arithmo-ai",
+  "version": "2.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "cap:add:android": "npx cap add android",
+    "cap:sync": "npx cap sync android",
+    "cap:open": "npx cap open android",
+    "apk:prepare": "npm run build && npm run cap:sync"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.6.1",
+    "@capacitor/cli": "^7.6.1",
+    "@capacitor/core": "^7.6.1",
+    "next": "14.2.15",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "react-markdown": "9.0.1",
+    "react-syntax-highlighter": "15.5.0",
+    "remark-gfm": "4.0.0"
+  }
+}
