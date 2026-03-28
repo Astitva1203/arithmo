@@ -13,6 +13,11 @@ const MAX_MESSAGE_LENGTH = 4000;
 const MAX_IMAGE_DATA_URL_LENGTH = 5700000;
 const MAX_IMAGES_PER_REQUEST = 5;
 const DEFAULT_IMAGE_DAILY_LIMIT = 3;
+const DEFAULT_FREEPIK_POLL_INTERVAL_MS = 1500;
+const DEFAULT_FREEPIK_POLL_TIMEOUT_MS = 45000;
+const GROQ_TEXT_MODEL = 'llama-3.3-70b-versatile';
+const GROQ_VISION_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
+const NVIDIA_MODEL = 'nvidia/nemotron-3-super-120b-a12b';
 const imageGenerationUsage = new Map();
 
 function readApiKeys(...sources) {
@@ -45,33 +50,11 @@ function normalizeProvider(value) {
     .trim()
     .toLowerCase();
 
-  if (
-    normalized === 'groq' ||
-    normalized === 'openrouter' ||
-    normalized === 'nvidia' ||
-    normalized === 'auto'
-  ) {
+  if (normalized === 'groq' || normalized === 'nvidia' || normalized === 'auto') {
     return normalized;
   }
 
   return 'auto';
-}
-
-function parseBooleanEnv(value, defaultValue = false) {
-  if (value == null) return defaultValue;
-  const normalized = String(value).trim().toLowerCase();
-  if (normalized === '1' || normalized === 'true' || normalized === 'yes') {
-    return true;
-  }
-  if (normalized === '0' || normalized === 'false' || normalized === 'no') {
-    return false;
-  }
-  return defaultValue;
-}
-
-function parseIntEnv(value, defaultValue = 0) {
-  const parsed = Number.parseInt(String(value ?? ''), 10);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : defaultValue;
 }
 
 function getCurrentUtcDateKey() {
@@ -89,42 +72,60 @@ function getClientIdentifier(request) {
   return firstIp || realIp || 'unknown-client';
 }
 
-function consumeImageGenerationQuota(request, limit) {
-  const dailyLimit = Number.isFinite(limit) ? limit : DEFAULT_IMAGE_DAILY_LIMIT;
-  if (dailyLimit <= 0) {
-    return { allowed: true, remaining: Infinity, used: 0, limit: 0 };
-  }
-
+function getUsageRecordKey(request) {
   const dayKey = getCurrentUtcDateKey();
   const clientId = getClientIdentifier(request);
-  const key = `${dayKey}:${clientId}`;
+  return `${dayKey}:${clientId}`;
+}
 
-  // Clean previous-day counters to avoid indefinite growth.
+function cleanupOldUsageCounters(dayKey) {
   for (const existingKey of imageGenerationUsage.keys()) {
     if (!existingKey.startsWith(`${dayKey}:`)) {
       imageGenerationUsage.delete(existingKey);
     }
   }
+}
 
-  const used = imageGenerationUsage.get(key) || 0;
-  if (used >= dailyLimit) {
+function getImageQuotaState(request, limit) {
+  const dailyLimit = Number.isFinite(limit) ? limit : DEFAULT_IMAGE_DAILY_LIMIT;
+  const dayKey = getCurrentUtcDateKey();
+  cleanupOldUsageCounters(dayKey);
+
+  if (dailyLimit <= 0) {
     return {
-      allowed: false,
-      remaining: 0,
-      used,
-      limit: dailyLimit,
+      allowed: true,
+      remaining: Infinity,
+      used: 0,
+      limit: 0,
       resetAtUtc: `${dayKey}T23:59:59.999Z`,
     };
   }
 
-  const nextUsed = used + 1;
-  imageGenerationUsage.set(key, nextUsed);
+  const key = getUsageRecordKey(request);
+  const used = imageGenerationUsage.get(key) || 0;
+  const allowed = used < dailyLimit;
+
   return {
-    allowed: true,
-    remaining: dailyLimit - nextUsed,
-    used: nextUsed,
+    allowed,
+    remaining: Math.max(dailyLimit - used, 0),
+    used,
     limit: dailyLimit,
     resetAtUtc: `${dayKey}T23:59:59.999Z`,
+  };
+}
+
+function consumeImageGenerationQuota(request, limit) {
+  const quota = getImageQuotaState(request, limit);
+  if (!quota.allowed || quota.limit <= 0) return quota;
+
+  const key = getUsageRecordKey(request);
+  const nextUsed = quota.used + 1;
+  imageGenerationUsage.set(key, nextUsed);
+
+  return {
+    ...quota,
+    used: nextUsed,
+    remaining: Math.max(quota.limit - nextUsed, 0),
   };
 }
 
@@ -216,6 +217,18 @@ function toSafeMessages(input) {
     .filter(Boolean);
 }
 
+function resolveIncomingMessages(body) {
+  const fromMessages = toSafeMessages(body?.messages);
+  if (fromMessages.length > 0) return fromMessages;
+
+  const fallbackText = sanitizeText(
+    body?.message || body?.prompt || body?.input || body?.query || ''
+  );
+  if (!fallbackText) return [];
+
+  return [{ role: 'user', content: fallbackText }];
+}
+
 function countImages(messages) {
   let count = 0;
 
@@ -241,57 +254,34 @@ function getLatestUserPrompt(messages) {
 
 function getGroqConfig() {
   return {
-    apiKeys: readApiKeys(
-      process.env.GROQ_API_KEY,
-      process.env.GROQ_API_KEY_2,
-      process.env.GROQ_API_KEYS
-    ),
-    baseUrl: process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1',
-    textModel: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
-    visionModel:
-      process.env.GROQ_VISION_MODEL ||
-      'meta-llama/llama-4-scout-17b-16e-instruct',
-  };
-}
-
-function getOpenRouterConfig() {
-  return {
-    apiKeys: readApiKeys(
-      process.env.OPENROUTER_API_KEY,
-      process.env.OPENROUTER_API_KEY_2,
-      process.env.OPENROUTER_API_KEYS
-    ),
-    baseUrl: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
-    textModel: process.env.OPENROUTER_MODEL || 'openrouter/auto',
-    visionModel: process.env.OPENROUTER_VISION_MODEL || 'openrouter/auto',
-    imageModel:
-      process.env.OPENROUTER_IMAGE_MODEL || 'bytedance-seed/seedream-4.5',
-    imageDailyLimit: parseIntEnv(
-      process.env.OPENROUTER_IMAGE_DAILY_LIMIT,
-      DEFAULT_IMAGE_DAILY_LIMIT
-    ),
-    siteUrl: (process.env.OPENROUTER_SITE_URL || '').trim(),
-    appName: (process.env.OPENROUTER_APP_NAME || '').trim() || 'Arithmo AI',
+    apiKeys: readApiKeys(process.env.GROQ_API_KEY),
+    baseUrl: 'https://api.groq.com/openai/v1',
+    textModel: GROQ_TEXT_MODEL,
+    visionModel: GROQ_VISION_MODEL,
   };
 }
 
 function getNvidiaConfig() {
   return {
-    apiKeys: readApiKeys(
-      process.env.NVIDIA_API_KEY,
-      process.env.NVIDIA_API_KEY_2,
-      process.env.NVIDIA_API_KEYS
-    ),
-    baseUrl: process.env.NVIDIA_BASE_URL || 'https://integrate.api.nvidia.com/v1',
-    textModel:
-      process.env.NVIDIA_MODEL || 'nvidia/nemotron-3-super-120b-a12b',
-    visionModel:
-      process.env.NVIDIA_VISION_MODEL ||
-      process.env.NVIDIA_MODEL ||
-      'nvidia/nemotron-3-super-120b-a12b',
-    enableThinking: parseBooleanEnv(process.env.NVIDIA_ENABLE_THINKING, true),
-    reasoningBudget: parseIntEnv(process.env.NVIDIA_REASONING_BUDGET, 16384),
-    includeReasoning: parseBooleanEnv(process.env.NVIDIA_INCLUDE_REASONING, false),
+    apiKeys: readApiKeys(process.env.NVIDIA_API_KEY),
+    baseUrl: 'https://integrate.api.nvidia.com/v1',
+    textModel: NVIDIA_MODEL,
+    visionModel: NVIDIA_MODEL,
+    maxTokens: 16384,
+    temperature: 1,
+    topP: 0.95,
+    reasoningBudget: 16384,
+    includeReasoning: false,
+  };
+}
+
+function getFreepikConfig() {
+  return {
+    apiKeys: readApiKeys(process.env.FREEPIK_API_KEY),
+    baseUrl: 'https://api.freepik.com',
+    imageDailyLimit: DEFAULT_IMAGE_DAILY_LIMIT,
+    pollIntervalMs: DEFAULT_FREEPIK_POLL_INTERVAL_MS,
+    pollTimeoutMs: DEFAULT_FREEPIK_POLL_TIMEOUT_MS,
   };
 }
 
@@ -302,30 +292,26 @@ function buildOpenAiCompatibleChatUrl(baseUrl, fallback) {
   return `${clean}/chat/completions`;
 }
 
-function pickProvider(preferred, hasGroqKey, hasOpenRouterKey, hasNvidiaKey) {
+function buildFreepikApiUrl(baseUrl, path) {
+  const cleanBase = (baseUrl || 'https://api.freepik.com').replace(/\/+$/, '');
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  return `${cleanBase}${cleanPath}`;
+}
+
+function pickProvider(preferred, hasGroqKey, hasNvidiaKey) {
   if (preferred === 'groq') {
     if (hasGroqKey) return 'groq';
-    if (hasOpenRouterKey) return 'openrouter';
     if (hasNvidiaKey) return 'nvidia';
     return 'groq';
-  }
-
-  if (preferred === 'openrouter') {
-    if (hasOpenRouterKey) return 'openrouter';
-    if (hasGroqKey) return 'groq';
-    if (hasNvidiaKey) return 'nvidia';
-    return 'openrouter';
   }
 
   if (preferred === 'nvidia') {
     if (hasNvidiaKey) return 'nvidia';
     if (hasGroqKey) return 'groq';
-    if (hasOpenRouterKey) return 'openrouter';
     return 'nvidia';
   }
 
   if (hasGroqKey) return 'groq';
-  if (hasOpenRouterKey) return 'openrouter';
   if (hasNvidiaKey) return 'nvidia';
   return 'groq';
 }
@@ -377,67 +363,6 @@ async function createGroqUpstream({ safeMessages, hasImageInput, config }) {
   );
 }
 
-async function createOpenRouterUpstream({ safeMessages, hasImageInput, config }) {
-  const model = hasImageInput ? config.visionModel : config.textModel;
-  const chatUrl = buildOpenAiCompatibleChatUrl(
-    config.baseUrl,
-    'https://openrouter.ai/api/v1/chat/completions'
-  );
-
-  return requestWithFallback(config.apiKeys, async (apiKey) => {
-    const headers = {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-      'X-Title': config.appName,
-    };
-
-    if (config.siteUrl) {
-      headers['HTTP-Referer'] = config.siteUrl;
-    }
-
-    return fetch(chatUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model,
-        stream: true,
-        temperature: 0.7,
-        messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...safeMessages],
-      }),
-    });
-  });
-}
-
-async function createOpenRouterImageResponse({ prompt, config }) {
-  const chatUrl = buildOpenAiCompatibleChatUrl(
-    config.baseUrl,
-    'https://openrouter.ai/api/v1/chat/completions'
-  );
-
-  return requestWithFallback(config.apiKeys, async (apiKey) => {
-    const headers = {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-      'X-Title': config.appName,
-    };
-
-    if (config.siteUrl) {
-      headers['HTTP-Referer'] = config.siteUrl;
-    }
-
-    return fetch(chatUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model: config.imageModel,
-        stream: false,
-        messages: [{ role: 'user', content: prompt }],
-        extra_body: { modalities: ['image'] },
-      }),
-    });
-  });
-}
-
 async function createNvidiaUpstream({ safeMessages, hasImageInput, config }) {
   const model = hasImageInput ? config.visionModel : config.textModel;
   const chatUrl = buildOpenAiCompatibleChatUrl(
@@ -446,30 +371,44 @@ async function createNvidiaUpstream({ safeMessages, hasImageInput, config }) {
   );
 
   return requestWithFallback(config.apiKeys, async (apiKey) => {
-    const extraBody = {};
+    const basePayload = {
+      model,
+      messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...safeMessages],
+      max_tokens: config.maxTokens,
+      temperature: config.temperature,
+      top_p: config.topP,
+      stream: true,
+    };
 
-    if (config.enableThinking) {
-      extraBody.chat_template_kwargs = { enable_thinking: true };
-    }
-    if (config.reasoningBudget > 0) {
-      extraBody.reasoning_budget = config.reasoningBudget;
+    const richPayload = {
+      ...basePayload,
+      chat_template_kwargs: { enable_thinking: true },
+      reasoning_budget: config.reasoningBudget,
+    };
+
+    const primary = await fetch(chatUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(richPayload),
+    });
+
+    // Some NVIDIA setups reject reasoning fields with 400.
+    if (primary.status !== 400) {
+      return primary;
     }
 
     return fetch(chatUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
         Authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify({
-        model,
-        stream: true,
-        temperature: 0.7,
-        top_p: 0.95,
-        max_tokens: 4096,
-        messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...safeMessages],
-        ...(Object.keys(extraBody).length > 0 ? { extra_body: extraBody } : {}),
-      }),
+      body: JSON.stringify(basePayload),
     });
   });
 }
@@ -551,6 +490,113 @@ function createTokenResponse(upstream, options = {}) {
   });
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeFreepikStatus(value) {
+  return String(value || '')
+    .trim()
+    .toUpperCase();
+}
+
+async function createFreepikTask({ prompt, config }) {
+  const url = buildFreepikApiUrl(config.baseUrl, '/v1/ai/mystic');
+  const payload = { prompt };
+
+  return requestWithFallback(config.apiKeys, async (apiKey) =>
+    fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'x-freepik-api-key': apiKey,
+      },
+      body: JSON.stringify(payload),
+    })
+  );
+}
+
+async function getFreepikTaskStatus({ taskId, config }) {
+  const url = buildFreepikApiUrl(
+    config.baseUrl,
+    `/v1/ai/mystic/${encodeURIComponent(taskId)}`
+  );
+
+  return requestWithFallback(config.apiKeys, async (apiKey) =>
+    fetch(url, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        'x-freepik-api-key': apiKey,
+      },
+    })
+  );
+}
+
+function extractGeneratedImageUrl(taskData) {
+  const generated = Array.isArray(taskData?.generated) ? taskData.generated : [];
+  return generated.find((url) => typeof url === 'string' && url.trim()) || '';
+}
+
+async function waitForFreepikImage({ taskId, config }) {
+  const timeoutMs =
+    config.pollTimeoutMs > 0 ? config.pollTimeoutMs : DEFAULT_FREEPIK_POLL_TIMEOUT_MS;
+  const intervalMs =
+    config.pollIntervalMs > 0
+      ? config.pollIntervalMs
+      : DEFAULT_FREEPIK_POLL_INTERVAL_MS;
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const pollResponse = await getFreepikTaskStatus({ taskId, config });
+    if (!pollResponse || !pollResponse.ok) {
+      const status = pollResponse?.status || 500;
+      const rawError = pollResponse ? await pollResponse.text().catch(() => '') : '';
+      return {
+        ok: false,
+        status,
+        error: `Freepik status API error (${status}). ${rawError || 'Request failed.'}`,
+      };
+    }
+
+    const data = await pollResponse.json().catch(() => null);
+    const taskData = data?.data || {};
+    const status = normalizeFreepikStatus(taskData?.status);
+    const imageUrl = extractGeneratedImageUrl(taskData);
+
+    if (imageUrl && (status === 'COMPLETED' || !status)) {
+      return { ok: true, imageUrl, status: status || 'COMPLETED' };
+    }
+
+    if (status === 'COMPLETED' && imageUrl) {
+      return { ok: true, imageUrl, status };
+    }
+
+    if (status === 'FAILED' || status === 'ERROR' || status === 'CANCELLED') {
+      return {
+        ok: false,
+        status: 502,
+        error: `Freepik image task ended with status ${status}.`,
+      };
+    }
+
+    await sleep(intervalMs);
+  }
+
+  return {
+    ok: false,
+    status: 504,
+    error:
+      'Freepik image generation timed out. Try a shorter prompt or try again in a moment.',
+  };
+}
+
+function getErrorLabel(provider) {
+  if (provider === 'nvidia') return 'Nemotron';
+  return 'Groq';
+}
+
 export async function POST(request) {
   try {
     let body;
@@ -560,15 +606,21 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
     }
 
-    const safeMessages = toSafeMessages(body?.messages);
-    if (safeMessages.length === 0) {
+    const requestedProvider = normalizeProvider(
+      body?.provider || 'auto'
+    );
+    const generateImage = Boolean(body?.generateImage);
+    const safeMessages = resolveIncomingMessages(body);
+    const imageCount = countImages(safeMessages);
+    const hasImageInput = imageCount > 0;
+
+    if (!generateImage && safeMessages.length === 0) {
       return NextResponse.json(
         { error: 'At least one message is required.' },
         { status: 400 }
       );
     }
 
-    const imageCount = countImages(safeMessages);
     if (imageCount > MAX_IMAGES_PER_REQUEST) {
       return NextResponse.json(
         {
@@ -578,55 +630,32 @@ export async function POST(request) {
       );
     }
 
-    const requestedProvider = normalizeProvider(
-      body?.provider || process.env.AI_PROVIDER || 'auto'
-    );
-    const generateImage = Boolean(body?.generateImage);
-    const hasImageInput = imageCount > 0;
-
     const groq = getGroqConfig();
-    const openRouter = getOpenRouterConfig();
     const nvidia = getNvidiaConfig();
+    const freepik = getFreepikConfig();
     const hasGroqKey = groq.apiKeys.length > 0;
-    const hasOpenRouterKey = openRouter.apiKeys.length > 0;
     const hasNvidiaKey = nvidia.apiKeys.length > 0;
 
-    if (!hasGroqKey && !hasOpenRouterKey && !hasNvidiaKey) {
-      return NextResponse.json(
-        {
-          error:
-            'Missing API keys. Set GROQ_API_KEY and/or OPENROUTER_API_KEY and/or NVIDIA_API_KEY in .env.local.',
-        },
-        { status: 500 }
-      );
-    }
-
-    const activeProvider = pickProvider(
-      requestedProvider,
-      hasGroqKey,
-      hasOpenRouterKey,
-      hasNvidiaKey
-    );
-
     if (generateImage) {
-      if (activeProvider !== 'openrouter') {
+      if (freepik.apiKeys.length === 0) {
         return NextResponse.json(
           {
-            error: 'Image generation is currently available only with OpenRouter provider.',
+            error:
+              'Missing Freepik API key. Set FREEPIK_API_KEY in your environment variables.',
           },
-          { status: 400 }
+          { status: 500 }
         );
       }
 
-      const quota = consumeImageGenerationQuota(request, openRouter.imageDailyLimit);
-      if (!quota.allowed) {
+      const quotaState = getImageQuotaState(request, freepik.imageDailyLimit);
+      if (!quotaState.allowed) {
         return NextResponse.json(
           {
-            error: `Daily image generation limit reached (${quota.limit}/day). Try again tomorrow.`,
-            limit: quota.limit,
-            used: quota.used,
-            remaining: quota.remaining,
-            resetAtUtc: quota.resetAtUtc,
+            error: `Daily image generation limit reached (${quotaState.limit}/day). Try again tomorrow.`,
+            limit: quotaState.limit,
+            used: quotaState.used,
+            remaining: quotaState.remaining,
+            resetAtUtc: quotaState.resetAtUtc,
           },
           { status: 429 }
         );
@@ -634,73 +663,86 @@ export async function POST(request) {
 
       const prompt = sanitizeText(body?.imagePrompt || getLatestUserPrompt(safeMessages));
       if (!prompt) {
-        return NextResponse.json(
-          { error: 'Image prompt is required.' },
-          { status: 400 }
-        );
+        return NextResponse.json({ error: 'Image prompt is required.' }, { status: 400 });
       }
 
-      const imageResponse = await createOpenRouterImageResponse({
-        prompt,
-        config: openRouter,
-      });
-
-      const imageLabel = 'OpenRouter';
-      if (!imageResponse || !imageResponse.ok) {
-        const rawError = imageResponse
-          ? await imageResponse.text().catch(() => '')
+      const createTaskResponse = await createFreepikTask({ prompt, config: freepik });
+      if (!createTaskResponse || !createTaskResponse.ok) {
+        const status = createTaskResponse?.status || 500;
+        const rawError = createTaskResponse
+          ? await createTaskResponse.text().catch(() => '')
           : '';
-        const status = imageResponse?.status || 500;
         return NextResponse.json(
           {
-            error: `${imageLabel} image API error (${status}). ${rawError || 'Request failed.'}`,
+            error: `Freepik image API error (${status}). ${rawError || 'Request failed.'}`,
           },
           { status }
         );
       }
 
-      const data = await imageResponse.json().catch(() => null);
-      const assistantMessage = data?.choices?.[0]?.message || {};
-      const images = Array.isArray(assistantMessage?.images)
-        ? assistantMessage.images
-        : [];
-      const imageDataUrl = images?.[0]?.image_url?.url || '';
-      const textContent = sanitizeText(
-        typeof assistantMessage?.content === 'string'
-          ? assistantMessage.content
-          : 'Image generated successfully.'
-      );
+      const taskPayload = await createTaskResponse.json().catch(() => null);
+      const taskData = taskPayload?.data || {};
+      const taskId = String(taskData?.task_id || '').trim();
+      let imageUrl = extractGeneratedImageUrl(taskData);
 
-      if (!imageDataUrl) {
+      if (!taskId && !imageUrl) {
         return NextResponse.json(
-          { error: 'Image model returned no image data.' },
+          { error: 'Freepik image task could not be started.' },
           { status: 502 }
         );
       }
 
+      if (!imageUrl && taskId) {
+        const taskResult = await waitForFreepikImage({ taskId, config: freepik });
+        if (!taskResult.ok) {
+          return NextResponse.json(
+            { error: taskResult.error || 'Freepik image generation failed.' },
+            { status: taskResult.status || 502 }
+          );
+        }
+        imageUrl = taskResult.imageUrl;
+      }
+
+      if (!imageUrl) {
+        return NextResponse.json(
+          { error: 'Freepik returned no image URL.' },
+          { status: 502 }
+        );
+      }
+
+      const quotaAfter = consumeImageGenerationQuota(request, freepik.imageDailyLimit);
+
       return NextResponse.json({
         type: 'image',
-        provider: 'openrouter',
-        model: openRouter.imageModel,
-        content: textContent || 'Image generated successfully.',
-        imageDataUrl,
+        provider: 'freepik',
+        model: 'freepik/mystic',
+        content: 'Image generated successfully.',
+        imageDataUrl: imageUrl,
         quota: {
-          limit: quota.limit,
-          used: quota.used,
-          remaining: quota.remaining,
-          resetAtUtc: quota.resetAtUtc,
+          limit: quotaAfter.limit,
+          used: quotaAfter.used,
+          remaining: quotaAfter.remaining,
+          resetAtUtc: quotaAfter.resetAtUtc,
         },
       });
     }
 
+    if (!hasGroqKey && !hasNvidiaKey) {
+      return NextResponse.json(
+        {
+          error:
+            'Missing API keys. Set GROQ_API_KEY and/or NVIDIA_API_KEY in your environment variables.',
+        },
+        { status: 500 }
+      );
+    }
+
+    const activeProvider = pickProvider(requestedProvider, hasGroqKey, hasNvidiaKey);
+    const providerForRequest =
+      hasImageInput && activeProvider === 'nvidia' && hasGroqKey ? 'groq' : activeProvider;
+
     let upstream;
-    if (activeProvider === 'openrouter') {
-      upstream = await createOpenRouterUpstream({
-        safeMessages,
-        hasImageInput,
-        config: openRouter,
-      });
-    } else if (activeProvider === 'nvidia') {
+    if (providerForRequest === 'nvidia') {
       upstream = await createNvidiaUpstream({
         safeMessages,
         hasImageInput,
@@ -716,12 +758,7 @@ export async function POST(request) {
 
     if (!upstream || !upstream.ok || !upstream.body) {
       const rawError = upstream ? await upstream.text().catch(() => '') : '';
-      const label =
-        activeProvider === 'openrouter'
-          ? 'OpenRouter'
-          : activeProvider === 'nvidia'
-            ? 'NVIDIA'
-            : 'Groq';
+      const label = getErrorLabel(providerForRequest);
       const status = upstream?.status || 500;
 
       if (status === 401) {
@@ -751,7 +788,7 @@ export async function POST(request) {
     }
 
     return createTokenResponse(upstream, {
-      includeReasoning: activeProvider === 'nvidia' && nvidia.includeReasoning,
+      includeReasoning: providerForRequest === 'nvidia' && nvidia.includeReasoning,
     });
   } catch (error) {
     return NextResponse.json(

@@ -119,7 +119,6 @@ export default function HomePage() {
       if (
         savedProvider === 'auto' ||
         savedProvider === 'groq' ||
-        savedProvider === 'openrouter' ||
         savedProvider === 'nvidia'
       ) {
         setProvider(savedProvider);
@@ -471,8 +470,7 @@ export default function HomePage() {
             >
               <option value="auto">Auto</option>
               <option value="groq">Groq</option>
-              <option value="openrouter">OpenRouter</option>
-              <option value="nvidia">NVIDIA</option>
+              <option value="nvidia">Nemotron</option>
             </select>
             <span className={`status ${isLoading ? 'busy' : 'ready'}`}>
               {isLoading ? 'Thinking...' : 'Online'}
@@ -511,7 +509,7 @@ export default function HomePage() {
               onClick={() => sendMessage({ generateImage: true })}
               type="button"
               disabled={isLoading || !input.trim()}
-              title="Generate an image using OpenRouter"
+              title="Generate an image using Freepik"
             >
               Create Image
             </button>
