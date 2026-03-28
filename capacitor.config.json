@@ -3,7 +3,7 @@
   "appName": "Arithmo",
   "webDir": "mobile-shell",
   "server": {
-    "url": "https://YOUR-VERCEL-APP-URL.vercel.app",
+    "url": "https://arithmo-murex.vercel.app/",
     "cleartext": false
   }
 }

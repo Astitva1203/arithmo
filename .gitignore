@@ -31,3 +31,13 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# gradle / android local caches
+.gradle-home/
+.gradle-tmp/
+android/.gradle-home/
+android/.gradle/
+android/.idea/
+
+# local IDE extras
+.idea/vcs.xml

@@ -7,7 +7,15 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
 
 const STORAGE_KEY = 'arithmo_messages_v2';
+const PROVIDER_STORAGE_KEY = 'arithmo_provider_v1';
 const MAX_IMAGE_FILE_SIZE = 3.5 * 1024 * 1024;
+const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL || '').trim();
+
+function buildApiUrl(path) {
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  if (!API_BASE_URL) return normalizedPath;
+  return `${API_BASE_URL.replace(/\/+$/, '')}${normalizedPath}`;
+}
 
 function createId() {
   return `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -77,6 +85,7 @@ function Message({ message }) {
 
 export default function HomePage() {
   const [messages, setMessages] = useState([]);
+  const [provider, setProvider] = useState('auto');
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [streamingText, setStreamingText] = useState('');
@@ -106,11 +115,35 @@ export default function HomePage() {
 
   useEffect(() => {
     try {
+      const savedProvider = localStorage.getItem(PROVIDER_STORAGE_KEY);
+      if (
+        savedProvider === 'auto' ||
+        savedProvider === 'groq' ||
+        savedProvider === 'openrouter' ||
+        savedProvider === 'nvidia'
+      ) {
+        setProvider(savedProvider);
+      }
+    } catch {
+      // ignore broken local storage
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-100)));
     } catch {
       // ignore local storage write errors
     }
   }, [messages]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(PROVIDER_STORAGE_KEY, provider);
+    } catch {
+      // ignore local storage write errors
+    }
+  }, [provider]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -245,11 +278,16 @@ export default function HomePage() {
     textareaRef.current?.focus();
   }, []);
 
-  const sendMessage = useCallback(async () => {
+  const sendMessage = useCallback(async (options = {}) => {
+    const generateImage = Boolean(options?.generateImage);
     const text = input.trim();
     const hasImage = Boolean(selectedImage?.dataUrl);
 
     if ((!text && !hasImage) || isLoading) return;
+    if (generateImage && !text) {
+      setError('Enter an image prompt first.');
+      return;
+    }
 
     setError('');
 
@@ -294,16 +332,44 @@ export default function HomePage() {
     abortRef.current = controller;
 
     try {
-      const response = await fetch('/api/chat', {
+      const response = await fetch(buildApiUrl('/api/chat'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: apiConversation }),
+        body: JSON.stringify({
+          messages: apiConversation,
+          provider,
+          generateImage,
+          imagePrompt: generateImage ? text : undefined,
+        }),
         signal: controller.signal,
       });
 
-      if (!response.ok || !response.body) {
+      if (!response.ok) {
         const data = await response.json().catch(() => ({}));
         throw new Error(data.error || `Request failed (${response.status})`);
+      }
+
+      if (generateImage) {
+        const data = await response.json().catch(() => ({}));
+        if (!data?.imageDataUrl) {
+          throw new Error(data?.error || 'Image generation failed.');
+        }
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: createId(),
+            role: 'assistant',
+            content: data?.content || 'Image generated successfully.',
+            imageDataUrl: data.imageDataUrl,
+            timestamp: Date.now(),
+          },
+        ]);
+        return;
+      }
+
+      if (!response.body) {
+        throw new Error('No response stream received.');
       }
 
       const reader = response.body.getReader();
@@ -353,7 +419,7 @@ export default function HomePage() {
       setStreamingText('');
       abortRef.current = null;
     }
-  }, [input, isLoading, messages, selectedImage]);
+  }, [input, isLoading, messages, provider, selectedImage]);
 
   const stopGeneration = useCallback(() => {
     if (abortRef.current) {
@@ -392,10 +458,22 @@ export default function HomePage() {
             <img src="/logo.png" alt="Arithmo logo" className="brand-logo" />
             <div>
               <h1>Arithmo AI</h1>
-              <p>Groq-powered assistant</p>
+              <p>Multi-provider assistant</p>
             </div>
           </div>
           <div className="header-actions">
+            <select
+              className="provider-select"
+              value={provider}
+              onChange={(e) => setProvider(e.target.value)}
+              disabled={isLoading}
+              title="Choose AI provider"
+            >
+              <option value="auto">Auto</option>
+              <option value="groq">Groq</option>
+              <option value="openrouter">OpenRouter</option>
+              <option value="nvidia">NVIDIA</option>
+            </select>
             <span className={`status ${isLoading ? 'busy' : 'ready'}`}>
               {isLoading ? 'Thinking...' : 'Online'}
             </span>
@@ -426,6 +504,16 @@ export default function HomePage() {
           <div className="input-tools">
             <button className="ghost-btn tool-btn" onClick={onAttachClick} type="button">
               Attach Image
+            </button>
+
+            <button
+              className="ghost-btn tool-btn"
+              onClick={() => sendMessage({ generateImage: true })}
+              type="button"
+              disabled={isLoading || !input.trim()}
+              title="Generate an image using OpenRouter"
+            >
+              Create Image
             </button>
 
             <button

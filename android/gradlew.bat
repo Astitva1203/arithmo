@@ -35,6 +35,16 @@ set APP_HOME=%DIRNAME%
 @rem Resolve any "." and ".." in APP_HOME to make it shorter.
 for %%i in ("%APP_HOME%") do set APP_HOME=%%~fi
 
+@rem Use project-local Gradle directories by default to avoid user profile/network restrictions.
+if not defined GRADLE_USER_HOME set GRADLE_USER_HOME=%APP_HOME%\.gradle-home
+if not exist "%GRADLE_USER_HOME%" mkdir "%GRADLE_USER_HOME%" >NUL 2>&1
+
+set GRADLE_TMP=%APP_HOME%\.gradle-tmp
+if not exist "%GRADLE_TMP%" mkdir "%GRADLE_TMP%" >NUL 2>&1
+
+if not defined GRADLE_OPTS set GRADLE_OPTS=
+set GRADLE_OPTS=%GRADLE_OPTS% -Djava.net.preferIPv4Stack=true -Djava.net.preferIPv6Addresses=false -Djava.io.tmpdir="%GRADLE_TMP%"
+
 @rem Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
 set DEFAULT_JVM_OPTS="-Xmx64m" "-Xms64m"
 
