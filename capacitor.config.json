@@ -1,9 +1,0 @@
-{
-  "appId": "com.arithmo.ai",
-  "appName": "Arithmo",
-  "webDir": "mobile-shell",
-  "server": {
-    "url": "https://arithmo-murex.vercel.app/",
-    "cleartext": false
-  }
-}
