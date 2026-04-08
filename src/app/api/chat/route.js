@@ -59,6 +59,8 @@ Important:
 
 const MAX_MESSAGES = 30;
 const MAX_MESSAGE_LENGTH = 4000;
+const TITLE_REFINE_MIN_USER_MESSAGES = 2;
+const TITLE_REFINE_SEED_LIMIT = 8;
 
 // ===== PROVIDER CONFIGS =====
 const GROQ_CONFIG = {
@@ -377,6 +379,19 @@ function resolveProvider(requested) {
   return null;
 }
 
+function resolveTitleProvider(preferred) {
+  const groqKey = process.env.GROQ_API_KEY;
+  const nvidiaKey = process.env.NVIDIA_API_KEY;
+
+  if (preferred === 'groq' && groqKey) return 'groq';
+  if (preferred === 'nvidia' && nvidiaKey) return 'nvidia';
+
+  // Prefer Groq for short title generation for stability.
+  if (groqKey) return 'groq';
+  if (nvidiaKey) return 'nvidia';
+  return null;
+}
+
 // ===== Call upstream LLM =====
 async function callUpstream(provider, messages, systemPrompt, options = {}) {
   const hasImageInput = Boolean(options.hasImageInput);
@@ -434,12 +449,23 @@ function normalizeGeneratedTitle(rawTitle, fallback) {
     .replace(/\s+/g, ' ')
     .trim();
 
-  const fallbackWords = safeFallback.split(' ').filter(Boolean).slice(0, 6);
-  if (fallbackWords.length >= 3) {
-    return fallbackWords.join(' ');
+  if (safeFallback) {
+    return safeFallback
+      .split(' ')
+      .filter(Boolean)
+      .slice(0, 6)
+      .join(' ');
   }
 
   return 'New Chat';
+}
+
+function normalizeTitleForCompare(title) {
+  return String(title || '')
+    .toLowerCase()
+    .replace(/[:;.,!?/\\|[\]{}()<>-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 async function generateSmartTitle(seedMessages, preferredProvider) {
@@ -452,7 +478,7 @@ async function generateSmartTitle(seedMessages, preferredProvider) {
   if (!transcript) return 'New Chat';
 
   const fallback = transcript.split('\n')[0] || 'New Chat';
-  const provider = resolveProvider(preferredProvider || 'auto');
+  const provider = resolveTitleProvider(preferredProvider || 'auto');
   if (!provider) return normalizeGeneratedTitle('', fallback);
 
   const payload = {
@@ -524,7 +550,7 @@ async function refineSmartTitle(existingTitle, seedMessages, preferredProvider) 
   const safeExisting = sanitizeText(existingTitle || 'New Chat');
   if (!transcript) return normalizeGeneratedTitle('', safeExisting);
 
-  const provider = resolveProvider(preferredProvider || 'auto');
+  const provider = resolveTitleProvider(preferredProvider || 'auto');
   if (!provider) return normalizeGeneratedTitle('', safeExisting);
 
   const payload = {
@@ -841,7 +867,6 @@ export async function POST(request) {
             fullResponse += confidenceSuffix;
             controller.enqueue(encoder.encode(confidenceSuffix));
           }
-          controller.close();
           // Save to DB
           if (auth?.userId && chatId && fullResponse.trim()) {
             try {
@@ -864,66 +889,69 @@ export async function POST(request) {
                 },
               ]);
               const { ObjectId } = await import('mongodb');
-              if (!ObjectId.isValid(chatId)) {
-                return;
-              }
-              const chat = await db.collection('chats').findOne({
-                _id: ObjectId.createFromHexString(chatId),
-                userId: auth.userId,
-              });
-              if (chat && chat.title === 'New Chat') {
-                const firstUserMessages = await db.collection('messages')
-                  .find({ chatId, role: 'user' })
-                  .sort({ timestamp: 1 })
-                  .limit(5)
-                  .project({ content: 1 })
-                  .toArray();
-
-                const seed = firstUserMessages
-                  .map((m) => sanitizeText(m?.content))
-                  .filter(Boolean);
-                const generatedTitle = await generateSmartTitle(seed, provider);
-
-                await db.collection('chats').updateOne(
-                  { _id: chat._id },
-                  { $set: { title: generatedTitle, updatedAt: now } }
-                );
-              } else if (chat) {
-                const userCount = await db.collection('messages').countDocuments({
-                  chatId,
-                  role: 'user',
+              if (ObjectId.isValid(chatId)) {
+                const chat = await db.collection('chats').findOne({
+                  _id: ObjectId.createFromHexString(chatId),
+                  userId: auth.userId,
                 });
-
-                let nextTitle = chat.title || 'New Chat';
-                // Refine title periodically as the conversation evolves.
-                if (userCount >= 3 && userCount % 3 === 0) {
-                  const recentUserMessages = await db.collection('messages')
+                if (chat && chat.title === 'New Chat') {
+                  const firstUserMessages = await db.collection('messages')
                     .find({ chatId, role: 'user' })
-                    .sort({ timestamp: -1 })
-                    .limit(6)
+                    .sort({ timestamp: 1 })
+                    .limit(5)
                     .project({ content: 1 })
                     .toArray();
 
-                  const seed = recentUserMessages
+                  const seed = firstUserMessages
                     .map((m) => sanitizeText(m?.content))
-                    .filter(Boolean)
-                    .reverse();
+                    .filter(Boolean);
+                  const generatedTitle = await generateSmartTitle(seed, provider);
 
-                  const refinedTitle = await refineSmartTitle(chat.title, seed, provider);
-                  if (refinedTitle && refinedTitle.toLowerCase() !== (chat.title || '').toLowerCase()) {
-                    nextTitle = refinedTitle;
+                  await db.collection('chats').updateOne(
+                    { _id: chat._id },
+                    { $set: { title: generatedTitle, updatedAt: now } }
+                  );
+                } else if (chat) {
+                  const userCount = await db.collection('messages').countDocuments({
+                    chatId,
+                    role: 'user',
+                  });
+
+                  let nextTitle = chat.title || 'New Chat';
+                  // Refine title continuously as the conversation evolves.
+                  if (userCount >= TITLE_REFINE_MIN_USER_MESSAGES) {
+                    const recentUserMessages = await db.collection('messages')
+                      .find({ chatId, role: 'user' })
+                      .sort({ timestamp: -1 })
+                      .limit(TITLE_REFINE_SEED_LIMIT)
+                      .project({ content: 1 })
+                      .toArray();
+
+                    const seed = recentUserMessages
+                      .map((m) => sanitizeText(m?.content))
+                      .filter(Boolean)
+                      .reverse();
+
+                    const refinedTitle = await refineSmartTitle(chat.title, seed, provider);
+                    if (
+                      refinedTitle &&
+                      normalizeTitleForCompare(refinedTitle) !== normalizeTitleForCompare(chat.title)
+                    ) {
+                      nextTitle = refinedTitle;
+                    }
                   }
-                }
 
-                await db.collection('chats').updateOne(
-                  { _id: chat._id },
-                  { $set: { title: nextTitle, updatedAt: now } }
-                );
+                  await db.collection('chats').updateOne(
+                    { _id: chat._id },
+                    { $set: { title: nextTitle, updatedAt: now } }
+                  );
+                }
               }
             } catch (dbErr) {
               console.error('DB save error (non-fatal):', dbErr);
             }
           }
+          controller.close();
         }
       },
     });
