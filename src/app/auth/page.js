@@ -18,8 +18,13 @@ export default function AuthPage() {
     setLoading(true);
 
     try {
-      const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
-      const body = isLogin ? { email, password } : { email, password, name };
+      const endpoint = '/api/auth/login';
+      const body = {
+        email,
+        password,
+        name,
+        allowPasswordReset: !isLogin,
+      };
 
       const res = await fetch(endpoint, {
         method: 'POST',
@@ -119,7 +124,7 @@ export default function AuthPage() {
             ) : isLogin ? (
               'Sign In'
             ) : (
-              'Create Account'
+              'Create Or Reset Account'
             )}
           </button>
         </form>

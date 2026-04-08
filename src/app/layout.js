@@ -1,5 +1,6 @@
 import './globals.css';
 import ThemeProvider from '@/components/ThemeProvider';
+import ServiceWorkerCleanup from '@/components/ServiceWorkerCleanup';
 
 export const metadata = {
   title: 'Arithmo AI — Intelligent Assistant',
@@ -27,6 +28,7 @@ export default function RootLayout({ children }) {
         />
       </head>
       <body>
+        <ServiceWorkerCleanup />
         <ThemeProvider>{children}</ThemeProvider>
       </body>
     </html>

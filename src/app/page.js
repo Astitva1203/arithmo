@@ -16,6 +16,17 @@ function formatTime(ts) {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+const MAX_ATTACH_IMAGE_SIZE = 4 * 1024 * 1024;
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Failed to read selected file.'));
+    reader.readAsDataURL(file);
+  });
+}
+
 /* ===== KATEX RENDERING ===== */
 function renderLatex(text) {
   if (typeof window === 'undefined' || typeof text !== 'string') return text;
@@ -79,6 +90,7 @@ function CodeBlock({ className, children, inline, ...props }) {
 function MessageBubble({ message }) {
   const isUser = message.role === 'user';
   const [copied, setCopied] = useState(false);
+  const imageSrc = message.imageDataUrl || message.imageUrl || '';
 
   function handleCopy() {
     navigator.clipboard.writeText(message.content).then(() => {
@@ -90,9 +102,9 @@ function MessageBubble({ message }) {
   return (
     <div className={`msg-row ${isUser ? 'user' : 'assistant'}`}>
       <div className={`msg-bubble ${isUser ? 'user' : 'assistant'}`}>
-        {message.imageUrl && (
+        {imageSrc && (
           <div className="msg-image-wrap">
-            <img src={message.imageUrl} alt="Generated image" />
+            <img src={imageSrc} alt={isUser ? 'Attached image' : 'Generated image'} />
           </div>
         )}
         {isUser ? (
@@ -146,9 +158,11 @@ export default function HomePage() {
 
   // Provider selection
   const [provider, setProvider] = useState('auto');
+  const [responseMode, setResponseMode] = useState('deep');
 
   // Image generation
   const [imageLoading, setImageLoading] = useState(false);
+  const [selectedImage, setSelectedImage] = useState(null);
 
   // Sidebar
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -158,6 +172,7 @@ export default function HomePage() {
   const abortRef = useRef(null);
   const endRef = useRef(null);
   const textareaRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   // ===== Auth check =====
   useEffect(() => {
@@ -189,8 +204,10 @@ export default function HomePage() {
   useEffect(() => {
     if (!activeChatId) {
       setMessages([]);
+      setSelectedImage(null);
       return;
     }
+    setSelectedImage(null);
     fetch(`/api/chats/${activeChatId}`)
       .then((r) => r.ok ? r.json() : null)
       .then((data) => {
@@ -249,10 +266,47 @@ export default function HomePage() {
     }
   }, []);
 
+  const onAttachClick = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  const onImageChange = useCallback(async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      setError('Please attach a valid image file.');
+      return;
+    }
+    if (file.size > MAX_ATTACH_IMAGE_SIZE) {
+      setError('Image too large. Use an image under 4MB.');
+      return;
+    }
+
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      setSelectedImage({
+        name: file.name,
+        dataUrl,
+      });
+      setError('');
+      textareaRef.current?.focus();
+    } catch {
+      setError('Could not read image file.');
+    }
+  }, []);
+
+  const removeSelectedImage = useCallback(() => {
+    setSelectedImage(null);
+    textareaRef.current?.focus();
+  }, []);
+
   // ===== Send message =====
   const sendMessage = useCallback(async () => {
     const text = input.trim();
-    if (!text || isLoading) return;
+    const hasImage = Boolean(selectedImage?.dataUrl);
+    if ((!text && !hasImage) || isLoading) return;
 
     setError('');
     let chatId = activeChatId;
@@ -280,13 +334,15 @@ export default function HomePage() {
     const userMessage = {
       id: createId(),
       role: 'user',
-      content: text,
+      content: text || 'Please analyze this image.',
+      ...(hasImage ? { imageDataUrl: selectedImage.dataUrl } : {}),
       timestamp: Date.now(),
     };
 
     const allMessages = [...messages, userMessage];
     setMessages(allMessages);
     setInput('');
+    setSelectedImage(null);
     setIsLoading(true);
     setStreamingText('');
 
@@ -295,12 +351,23 @@ export default function HomePage() {
     abortRef.current = controller;
 
     try {
-      const apiMessages = allMessages.map((m) => ({ role: m.role, content: m.content }));
+      const apiMessages = allMessages.map((m) => {
+        if (m.role === 'user' && m.imageDataUrl) {
+          return {
+            role: 'user',
+            content: [
+              { type: 'text', text: m.content || 'Please analyze this image.' },
+              { type: 'image_url', image_url: { url: m.imageDataUrl } },
+            ],
+          };
+        }
+        return { role: m.role, content: m.content };
+      });
 
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: apiMessages, chatId, provider }),
+        body: JSON.stringify({ messages: apiMessages, chatId, provider, mode: responseMode }),
         signal: controller.signal,
       });
 
@@ -347,7 +414,7 @@ export default function HomePage() {
       setStreamingText('');
       abortRef.current = null;
     }
-  }, [input, isLoading, messages, activeChatId, provider]);
+  }, [input, isLoading, messages, activeChatId, provider, responseMode, selectedImage]);
 
   // ===== Generate Image =====
   const generateImage = useCallback(async () => {
@@ -615,6 +682,16 @@ export default function HomePage() {
                 <option value="groq">Groq (Llama 3.3)</option>
                 <option value="nvidia">Nemotron</option>
               </select>
+              <select
+                className="model-select"
+                value={responseMode}
+                onChange={(e) => setResponseMode(e.target.value)}
+                disabled={isLoading}
+                title="Choose response mode"
+              >
+                <option value="deep">Deep Mode</option>
+                <option value="speed">Speed Mode</option>
+              </select>
               <span className={`status-badge ${isLoading || imageLoading ? 'thinking' : 'online'}`}>
                 {isLoading ? '● Thinking...' : imageLoading ? '● Creating...' : '● Online'}
               </span>
@@ -673,6 +750,18 @@ export default function HomePage() {
           {error && <div className="error-banner">⚠️ {error}</div>}
 
           <div className="input-area">
+            {selectedImage && (
+              <div className="image-chip">
+                <img src={selectedImage.dataUrl} alt={selectedImage.name || 'Attached image'} />
+                <div className="image-chip-meta">
+                  <strong>{selectedImage.name}</strong>
+                  <span>Attached for analysis</span>
+                </div>
+                <button className="image-remove-btn" onClick={removeSelectedImage} type="button">
+                  Remove
+                </button>
+              </div>
+            )}
             <div className="input-row">
               <textarea
                 ref={textareaRef}
@@ -681,6 +770,21 @@ export default function HomePage() {
                 onKeyDown={onKeyDown}
                 placeholder="Message Arithmo AI..."
                 rows={1}
+              />
+              <button
+                className="image-gen-btn"
+                onClick={onAttachClick}
+                disabled={isLoading || imageLoading}
+                title="Attach image to ask about it"
+              >
+                📎
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/jpg,image/webp"
+                hidden
+                onChange={onImageChange}
               />
               <button
                 className="image-gen-btn"
@@ -693,7 +797,11 @@ export default function HomePage() {
               {isLoading ? (
                 <button className="send-btn stop" onClick={stopGeneration}>⬛</button>
               ) : (
-                <button className="send-btn" onClick={() => sendMessage()} disabled={!input.trim()}>
+                <button
+                  className="send-btn"
+                  onClick={() => sendMessage()}
+                  disabled={!input.trim() && !selectedImage}
+                >
                   ➤
                 </button>
               )}

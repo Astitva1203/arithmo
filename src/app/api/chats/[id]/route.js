@@ -47,6 +47,8 @@ export async function GET(request, { params }) {
         id: m._id.toString(),
         role: m.role,
         content: m.content,
+        imageDataUrl: m.imageDataUrl || '',
+        imageUrl: m.imageUrl || '',
         timestamp: m.timestamp,
       })),
     });
