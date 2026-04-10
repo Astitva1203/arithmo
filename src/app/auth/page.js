@@ -56,7 +56,7 @@ export default function AuthPage() {
         <div className="auth-brand">
           <img src="/logo.png" alt="Arithmo AI" className="auth-logo" />
           <h1>Arithmo AI</h1>
-          <p>Your intelligent assistant powered by Groq</p>
+          <p>Your intelligent assistant powered by Groq + NVIDIA</p>
         </div>
 
         <div className="auth-tabs">

@@ -1,7 +1,7 @@
 import Link from 'next/link';
 
 export const metadata = {
-  title: 'Privacy Policy — Arithmo AI',
+  title: 'Privacy Policy - Arithmo AI',
   description: 'Privacy Policy for Arithmo AI platform.',
 };
 
@@ -10,7 +10,7 @@ export default function PrivacyPage() {
     <div className="legal-page">
       <div className="bg-glow" />
       <div className="legal-container">
-        <Link href="/" className="legal-back">← Back to Arithmo AI</Link>
+        <Link href="/" className="legal-back">&lt;- Back to Arithmo AI</Link>
         <h1>Privacy Policy</h1>
         <p className="legal-date">Last updated: April 1, 2026</p>
 
@@ -31,13 +31,14 @@ export default function PrivacyPage() {
           <li>Improve the Service and user experience</li>
         </ul>
 
-        <h2>3. Data Storage & Security</h2>
+        <h2>3. Data Storage and Security</h2>
         <p>Your data is stored in a secure MongoDB database. Passwords are hashed using bcrypt and are never stored in plain text. Authentication uses JWT tokens with httpOnly cookies. We implement reasonable security measures to protect your information.</p>
 
         <h2>4. Third-Party Services</h2>
         <p>Arithmo AI uses the following third-party APIs to process your requests:</p>
         <ul>
           <li><strong>Groq API:</strong> For processing AI chat interactions. Your messages are sent to Groq&apos;s servers for inference. Please review <a href="https://groq.com/privacy-policy/" target="_blank" rel="noopener noreferrer">Groq&apos;s Privacy Policy</a>.</li>
+          <li><strong>NVIDIA API:</strong> For advanced reasoning responses when selected or routed automatically.</li>
         </ul>
 
         <h2>5. Data Sharing</h2>
@@ -47,7 +48,7 @@ export default function PrivacyPage() {
           <li>To protect the rights, safety, or property of users or the public</li>
         </ul>
 
-        <h2>6. Data Retention & Deletion</h2>
+        <h2>6. Data Retention and Deletion</h2>
         <p>Your chat history is retained as long as your account is active. You can delete individual chats at any time through the application. To delete your account and all associated data, please contact us.</p>
 
         <h2>7. Your Rights</h2>

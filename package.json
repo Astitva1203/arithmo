@@ -6,9 +6,16 @@
     "predev": "node scripts/clean-next.cjs",
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "android:add": "npx cap add android",
+    "android:sync": "npx cap sync android",
+    "android:open": "powershell -NoProfile -Command \"Remove-Item Env:IDEA_PROPERTIES -ErrorAction SilentlyContinue; Remove-Item Env:STUDIO_PROPERTIES -ErrorAction SilentlyContinue; npx cap open android\"",
+    "android:copy": "npx cap copy android"
   },
   "dependencies": {
+    "@capacitor/android": "^8.3.0",
+    "@capacitor/cli": "^8.3.0",
+    "@capacitor/core": "^8.3.0",
     "@tailwindcss/postcss": "^4.2.2",
     "bcryptjs": "^3.0.3",
     "jsonwebtoken": "^9.0.3",

@@ -1,0 +1,15 @@
+{
+  "appId": "com.arithmo.ai",
+  "appName": "Arithmo",
+  "webDir": "public",
+  "bundledWebRuntime": false,
+  "server": {
+    "url": "https://arithmo-sepia.vercel.app",
+    "androidScheme": "https",
+    "cleartext": false,
+    "allowNavigation": [
+      "arithmo-sepia.vercel.app",
+      "*.vercel.app"
+    ]
+  }
+}

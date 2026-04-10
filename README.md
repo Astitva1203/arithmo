@@ -1,75 +1,91 @@
 # Arithmo AI
 
-A premium AI chatbot powered by [Groq API](https://groq.com/) with a liquid glass UI, persistent chat history, and user authentication.
+Arithmo is a full-stack AI chatbot with a modern liquid glass UI, streaming responses, image analysis, authentication, MongoDB persistence, and multi-provider AI routing.
 
-## Features
+## Key Features
 
-- 🧠 **AI Chat** — Powered by Groq (Llama 3.3 70B) with streaming responses
-- 💬 **Multi-Chat** — Create, rename, delete, and switch between conversations
-- 🔐 **Authentication** — Email/password auth with JWT + httpOnly cookies
-- 🗄️ **Database** — MongoDB for persistent chat history and user data
-- 🎨 **Liquid Glass UI** — Premium glassmorphism design with dark/light themes
-- 📐 **Math Rendering** — LaTeX support via KaTeX
-- 💻 **Code Highlighting** — Syntax highlighting with one-click copy
-- 📥 **Export** — Download chat history as TXT
-- 📱 **Responsive** — Full mobile, tablet, and desktop support
-- ⚖️ **Legal** — Terms of Use, Privacy Policy, AI disclaimer
+- Multi-provider AI chat: Groq + NVIDIA
+- Intelligent provider routing (auto mode)
+- Bidirectional fallback with retry:
+  - Groq -> NVIDIA
+  - NVIDIA -> Groq
+- Real-time Search Mode (RAG-style web grounding)
+- Source links added for web-grounded responses
+- Streaming responses with markdown and code highlighting
+- Image attach for visual questions
+- Image generation via Freepik API with daily limit
+- Chat history, rename, delete, auto-title, dynamic title refinement
+- Auth with JWT cookie + MongoDB user storage
+- Export chat to TXT
+- Android packaging support (Capacitor)
 
-## Setup
+## Architecture
 
-### 1. Clone & Install
+- `src/services/ai/groqService.js`
+- `src/services/ai/nvidiaService.js`
+- `src/router/aiRouter.js`
+- `src/services/search/webSearch.js`
+- `src/app/api/chat/route.js`
+- `src/app/api/search/route.js`
+- `src/app/api/health/route.js`
 
-```bash
-git clone <your-repo-url>
-cd arithmo
-npm install
-```
+## Environment Variables
 
-### 2. Environment Variables
-
-Copy `.env.example` to `.env.local` and fill in your values:
+Copy `.env.example` to `.env.local` and fill values:
 
 ```bash
 cp .env.example .env.local
 ```
 
-Required variables:
-- `GROQ_API_KEY` — Get from [console.groq.com](https://console.groq.com/)
-- `MONGODB_URI` — MongoDB connection string ([MongoDB Atlas](https://www.mongodb.com/atlas) recommended)
-- `JWT_SECRET` — A long random string for JWT signing
+Required:
 
-### 3. Run Development Server
+- `GROQ_API_KEY`
+- `MONGODB_URI`
+- `JWT_SECRET`
+
+Optional:
+
+- `NVIDIA_API_KEY` (for NVIDIA provider)
+- `FREEPIK_API_KEY` (image generation)
+- `SERPAPI_KEY` (preferred web search)
+- `BING_SEARCH_API_KEY` (fallback web search)
+- `BING_SEARCH_ENDPOINT` (default: `https://api.bing.microsoft.com/v7.0/search`)
+- `DAILY_IMAGE_LIMIT` (default: `3`)
+- `MAX_MESSAGES_PER_CHAT` (default: `0`, meaning no server-side cap)
+
+## Run Locally
 
 ```bash
+npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Open: `http://localhost:3000`
 
-## Deployment
+## Build
 
-### Frontend + Backend → Vercel
+```bash
+npm run build
+npm run start
+```
 
-1. Push your code to GitHub
-2. Import the repository in [Vercel](https://vercel.com)
-3. Set environment variables in Vercel project settings
-4. Deploy!
+## Routing Logic
 
-### Database → MongoDB Atlas
+- Provider `auto`:
+  - Simpler prompts prefer Groq (speed)
+  - Complex prompts prefer NVIDIA (depth)
+- If selected provider fails, Arithmo retries once then switches provider.
+- Search Mode:
+  - Performs web search when mode is `search` or query looks real-time (`latest`, `news`, `today`, etc.)
+  - Injects top web findings into system context
+  - Appends source links in final answer
 
-1. Create a free cluster at [mongodb.com/atlas](https://www.mongodb.com/atlas)
-2. Create a database user and whitelist your IP (or use `0.0.0.0/0` for Vercel)
-3. Copy the connection string to `MONGODB_URI`
+## Android (APK)
 
-## Tech Stack
+```bash
+npm run android:add
+npm run android:sync
+npm run android:open
+```
 
-- **Framework**: Next.js 14 (App Router)
-- **Styling**: Tailwind CSS v4 + Custom CSS
-- **AI**: Groq API (Llama 3.3 70B)
-- **Database**: MongoDB
-- **Auth**: JWT + bcrypt
-- **Rendering**: React Markdown, KaTeX, Prism.js
-
-## Contact
-
-astitvapandey1203@gmail.com
+Build APK from Android Studio: `Build > Build APK(s)`.

@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -17,6 +17,8 @@ function formatTime(ts) {
 }
 
 const MAX_ATTACH_IMAGE_SIZE = 4 * 1024 * 1024;
+const REALTIME_QUERY_PATTERN =
+  /\b(latest|news|today|current|updates?|recent|happening|new|trend(?:ing)?|this week|this month)\b/i;
 
 function fileToDataUrl(file) {
   return new Promise((resolve, reject) => {
@@ -25,6 +27,20 @@ function fileToDataUrl(file) {
     reader.onerror = () => reject(new Error('Failed to read selected file.'));
     reader.readAsDataURL(file);
   });
+}
+
+function providerLabel(value) {
+  const normalized = String(value || '').toLowerCase();
+  if (normalized === 'groq') return 'Groq';
+  if (normalized === 'nvidia') return 'NVIDIA';
+  return 'Auto';
+}
+
+function searchProviderLabel(value) {
+  const normalized = String(value || '').toLowerCase();
+  if (normalized === 'serpapi') return 'SerpAPI';
+  if (normalized === 'bing') return 'Bing';
+  return 'None';
 }
 
 /* ===== KATEX RENDERING ===== */
@@ -71,7 +87,7 @@ function CodeBlock({ className, children, inline, ...props }) {
       <div className="code-block-header">
         <span className="code-lang">{lang}</span>
         <button className="code-copy-btn" onClick={handleCopy}>
-          {copied ? '✓ Copied' : 'Copy'}
+          {copied ? 'Copied' : 'Copy'}
         </button>
       </div>
       <SyntaxHighlighter
@@ -129,7 +145,7 @@ function MessageBubble({ message }) {
           <span className="msg-time">{formatTime(message.timestamp)}</span>
           {!isUser && (
             <button className={`copy-btn ${copied ? 'copied' : ''}`} onClick={handleCopy}>
-              {copied ? '✓ Copied' : 'Copy'}
+              {copied ? 'Copied' : 'Copy'}
             </button>
           )}
         </div>
@@ -159,6 +175,11 @@ export default function HomePage() {
   // Provider selection
   const [provider, setProvider] = useState('auto');
   const [responseMode, setResponseMode] = useState('deep');
+  const [chatMode, setChatMode] = useState('chat');
+  const [activeProvider, setActiveProvider] = useState('Auto');
+  const [searchProvider, setSearchProvider] = useState('None');
+  const [isSearching, setIsSearching] = useState(false);
+  const [ragUsed, setRagUsed] = useState(false);
 
   // Image generation
   const [imageLoading, setImageLoading] = useState(false);
@@ -188,6 +209,10 @@ export default function HomePage() {
       .catch(() => router.push('/auth'))
       .finally(() => setAuthLoading(false));
   }, [router]);
+
+  useEffect(() => {
+    setActiveProvider(providerLabel(provider));
+  }, [provider]);
 
   // ===== Load chats =====
   useEffect(() => {
@@ -309,6 +334,8 @@ export default function HomePage() {
     if ((!text && !hasImage) || isLoading) return;
 
     setError('');
+    setRagUsed(false);
+    setSearchProvider('None');
     let chatId = activeChatId;
 
     // Create a chat if none active
@@ -345,6 +372,7 @@ export default function HomePage() {
     setSelectedImage(null);
     setIsLoading(true);
     setStreamingText('');
+    setIsSearching(chatMode === 'search' || REALTIME_QUERY_PATTERN.test(text));
 
     if (abortRef.current) abortRef.current.abort();
     const controller = new AbortController();
@@ -367,7 +395,14 @@ export default function HomePage() {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: apiMessages, chatId, provider, mode: responseMode }),
+        body: JSON.stringify({
+          messages: apiMessages,
+          chatId,
+          provider,
+          mode: responseMode,
+          responseMode,
+          chatMode,
+        }),
         signal: controller.signal,
       });
 
@@ -377,6 +412,13 @@ export default function HomePage() {
       }
 
       if (!res.body) throw new Error('No response stream.');
+
+      const usedProvider = providerLabel(res.headers.get('x-ai-provider'));
+      const usedSearchProvider = searchProviderLabel(res.headers.get('x-search-provider'));
+      setActiveProvider(usedProvider);
+      setRagUsed(res.headers.get('x-rag-used') === '1');
+      setSearchProvider(usedSearchProvider);
+      setIsSearching(false);
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -411,10 +453,11 @@ export default function HomePage() {
       setError(msg);
     } finally {
       setIsLoading(false);
+      setIsSearching(false);
       setStreamingText('');
       abortRef.current = null;
     }
-  }, [input, isLoading, messages, activeChatId, provider, responseMode, selectedImage]);
+  }, [input, isLoading, messages, activeChatId, provider, responseMode, chatMode, selectedImage]);
 
   // ===== Generate Image =====
   const generateImage = useCallback(async () => {
@@ -448,7 +491,7 @@ export default function HomePage() {
     const userMessage = {
       id: createId(),
       role: 'user',
-      content: `🎨 Generate image: ${prompt}`,
+      content: `Generate image: ${prompt}`,
       timestamp: Date.now(),
     };
     setMessages((prev) => [...prev, userMessage]);
@@ -626,14 +669,14 @@ export default function HomePage() {
                         onClick={(e) => { e.stopPropagation(); startRename(chat); }}
                         title="Rename"
                       >
-                        ✏️
+                        Rename
                       </button>
                       <button
                         className="chat-action-btn delete"
                         onClick={(e) => { e.stopPropagation(); deleteChat(chat.id); }}
                         title="Delete"
                       >
-                        🗑️
+                        Delete
                       </button>
                     </div>
                   </>
@@ -666,7 +709,7 @@ export default function HomePage() {
           <header className="app-header">
             <div className="header-left">
               <button className="mobile-menu-btn" onClick={() => setSidebarOpen(true)}>
-                ☰
+                Menu
               </button>
               <span className="chat-title">{activeChat?.title || 'Arithmo AI'}</span>
             </div>
@@ -680,7 +723,17 @@ export default function HomePage() {
               >
                 <option value="auto">Auto</option>
                 <option value="groq">Groq (Llama 3.3)</option>
-                <option value="nvidia">Nemotron</option>
+                <option value="nvidia">NVIDIA (Nemotron)</option>
+              </select>
+              <select
+                className="model-select"
+                value={chatMode}
+                onChange={(e) => setChatMode(e.target.value)}
+                disabled={isLoading}
+                title="Choose chat mode"
+              >
+                <option value="chat">Chat Mode</option>
+                <option value="search">Search Mode (RAG/SerpAPI)</option>
               </select>
               <select
                 className="model-select"
@@ -692,9 +745,18 @@ export default function HomePage() {
                 <option value="deep">Deep Mode</option>
                 <option value="speed">Speed Mode</option>
               </select>
-              <span className={`status-badge ${isLoading || imageLoading ? 'thinking' : 'online'}`}>
-                {isLoading ? '● Thinking...' : imageLoading ? '● Creating...' : '● Online'}
+              <span className={`status-badge ${isLoading || imageLoading || isSearching ? 'thinking' : 'online'}`}>
+                {isSearching
+                  ? 'Searching...'
+                  : isLoading
+                    ? 'Thinking...'
+                    : imageLoading
+                      ? 'Creating...'
+                      : 'Online'}
               </span>
+              <span className="status-badge online">Using: {activeProvider}</span>
+              {ragUsed && <span className="status-badge online">RAG</span>}
+              {ragUsed && <span className="status-badge online">Search: {searchProvider}</span>}
               {activeChatId && messages.length > 0 && (
                 <button
                   className="theme-toggle"
@@ -702,11 +764,11 @@ export default function HomePage() {
                   title="Export chat"
                   style={{ fontSize: '0.82rem' }}
                 >
-                  📥
+                  Export
                 </button>
               )}
               <button className="theme-toggle" onClick={toggleTheme} title="Toggle theme">
-                {theme === 'dark' ? '☀️' : '🌙'}
+                {theme === 'dark' ? 'Light' : 'Dark'}
               </button>
             </div>
           </header>
@@ -714,14 +776,14 @@ export default function HomePage() {
           <div className="chat-body">
             {visibleMessages.length === 0 && (
               <div className="empty-state">
-                <div className="empty-state-icon">🧠</div>
+                <div className="empty-state-icon">AI</div>
                 <h2>What can I help you with?</h2>
-                <p>Ask me anything — math problems, code debugging, explanations, creative writing, and more.</p>
+                <p>Ask me anything - math problems, code debugging, explanations, creative writing, and more.</p>
                 <div className="empty-suggestions">
                   {[
                     'Explain quantum computing simply',
                     'Write a Python sorting algorithm',
-                    'Solve: ∫ x² dx from 0 to 5',
+                    'Solve: integral of x^2 from 0 to 5',
                     'Help me debug my React code',
                   ].map((s) => (
                     <button key={s} className="suggestion-chip" onClick={() => { setInput(s); textareaRef.current?.focus(); }}>
@@ -747,7 +809,7 @@ export default function HomePage() {
             <div ref={endRef} />
           </div>
 
-          {error && <div className="error-banner">⚠️ {error}</div>}
+          {error && <div className="error-banner">Warning: {error}</div>}
 
           <div className="input-area">
             {selectedImage && (
@@ -776,6 +838,7 @@ export default function HomePage() {
                 onClick={onAttachClick}
                 disabled={isLoading || imageLoading}
                 title="Attach image to ask about it"
+                aria-label="Attach image"
               >
                 📎
               </button>
@@ -791,24 +854,25 @@ export default function HomePage() {
                 onClick={generateImage}
                 disabled={!input.trim() || isLoading || imageLoading}
                 title="Generate image from prompt"
+                aria-label="Generate image"
               >
-                {imageLoading ? '⏳' : '🎨'}
+                {imageLoading ? '⏳' : '🖼️'}
               </button>
               {isLoading ? (
-                <button className="send-btn stop" onClick={stopGeneration}>⬛</button>
+                <button className="send-btn stop" onClick={stopGeneration}>Stop</button>
               ) : (
                 <button
                   className="send-btn"
                   onClick={() => sendMessage()}
                   disabled={!input.trim() && !selectedImage}
                 >
-                  ➤
+                  Send
                 </button>
               )}
             </div>
             <p className="input-disclaimer">
               Arithmo AI may produce incorrect information.{' '}
-              <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a> · astitvapandey1203@gmail.com
+              <a href="/terms">Terms</a> | <a href="/privacy">Privacy</a> | astitvapandey1203@gmail.com
             </p>
           </div>
         </main>
