@@ -33,6 +33,7 @@ function pickAutoProvider({ latestUserText, hasImageInput, chatMode }) {
   }
 
   const complex = isComplexQuery(latestUserText);
+  if (chatMode === 'research' && nvidiaAvailable) return 'nvidia';
   if (chatMode === 'search' && nvidiaAvailable && complex) return 'nvidia';
   if (complex && nvidiaAvailable) return 'nvidia';
   if (groqAvailable) return 'groq';
@@ -188,4 +189,3 @@ export async function routeChatRequest({
     }
   );
 }
-

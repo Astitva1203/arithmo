@@ -17,6 +17,9 @@ function formatTime(ts) {
 }
 
 const MAX_ATTACH_IMAGE_SIZE = 4 * 1024 * 1024;
+const SIDEBAR_WIDTH_KEY = 'arithmo_sidebar_width';
+const SIDEBAR_WIDTH_MIN = 240;
+const SIDEBAR_WIDTH_MAX = 460;
 const REALTIME_QUERY_PATTERN =
   /\b(latest|news|today|current|updates?|recent|happening|new|trend(?:ing)?|this week|this month)\b/i;
 
@@ -41,6 +44,85 @@ function searchProviderLabel(value) {
   if (normalized === 'serpapi') return 'SerpAPI';
   if (normalized === 'bing') return 'Bing';
   return 'None';
+}
+
+const KNOWN_SECTIONS = [
+  'Summary',
+  'Key Points',
+  'Perspectives',
+  'Conclusion',
+  'Sources',
+  'Next Questions',
+  'Confidence',
+  'Reason',
+];
+
+function escapeRegex(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function extractSection(text, sectionName) {
+  const content = String(text || '');
+  if (!content) return '';
+  const heading = escapeRegex(sectionName);
+  const otherHeadings = KNOWN_SECTIONS.filter((item) => item !== sectionName)
+    .map((item) => escapeRegex(item))
+    .join('|');
+  const pattern = new RegExp(
+    `(?:^|\\n)${heading}\\s*:\\s*\\n([\\s\\S]*?)(?=\\n(?:${otherHeadings})\\s*:|$)`,
+    'i'
+  );
+  const match = content.match(pattern);
+  return match?.[1]?.trim() || '';
+}
+
+function removeSection(text, sectionName) {
+  const content = String(text || '');
+  if (!content) return '';
+  const heading = escapeRegex(sectionName);
+  const otherHeadings = KNOWN_SECTIONS.filter((item) => item !== sectionName)
+    .map((item) => escapeRegex(item))
+    .join('|');
+  const pattern = new RegExp(
+    `(?:^|\\n)${heading}\\s*:\\s*\\n[\\s\\S]*?(?=\\n(?:${otherHeadings})\\s*:|$)`,
+    'i'
+  );
+  return content.replace(pattern, '').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function parseMarkdownSources(sectionText) {
+  const input = String(sectionText || '');
+  if (!input) return [];
+
+  const markdownMatches = [...input.matchAll(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/gi)];
+  if (markdownMatches.length > 0) {
+    return markdownMatches.map((match) => ({
+      title: match[1].trim(),
+      url: match[2].trim(),
+    }));
+  }
+
+  const lines = input
+    .split('\n')
+    .map((line) => line.replace(/^[-*]\s*/, '').trim())
+    .filter(Boolean);
+
+  return lines
+    .map((line) => {
+      const urlMatch = line.match(/https?:\/\/\S+/i);
+      if (!urlMatch) return null;
+      const url = urlMatch[0];
+      const title = line.replace(url, '').replace(/[-–—:]/g, ' ').trim() || url;
+      return { title, url };
+    })
+    .filter(Boolean);
+}
+
+function parseBulletLines(sectionText) {
+  return String(sectionText || '')
+    .split('\n')
+    .map((line) => line.replace(/^[-*]\s*/, '').trim())
+    .filter(Boolean);
 }
 
 /* ===== KATEX RENDERING ===== */
@@ -103,10 +185,22 @@ function CodeBlock({ className, children, inline, ...props }) {
 }
 
 /* ===== MESSAGE COMPONENT ===== */
-function MessageBubble({ message }) {
+function MessageBubble({ message, onFollowUpClick }) {
   const isUser = message.role === 'user';
   const [copied, setCopied] = useState(false);
   const imageSrc = message.imageDataUrl || message.imageUrl || '';
+  const sourceItems = useMemo(
+    () => parseMarkdownSources(extractSection(message.content, 'Sources')).slice(0, 5),
+    [message.content]
+  );
+  const nextQuestions = useMemo(
+    () => parseBulletLines(extractSection(message.content, 'Next Questions')).slice(0, 3),
+    [message.content]
+  );
+  const markdownText = useMemo(() => {
+    if (isUser) return message.content;
+    return removeSection(removeSection(message.content, 'Sources'), 'Next Questions');
+  }, [isUser, message.content]);
 
   function handleCopy() {
     navigator.clipboard.writeText(message.content).then(() => {
@@ -138,8 +232,43 @@ function MessageBubble({ message }) {
               },
             }}
           >
-            {message.content}
+            {markdownText}
           </ReactMarkdown>
+        )}
+        {!isUser && sourceItems.length > 0 && (
+          <div className="msg-sources-panel">
+            <div className="msg-sources-title">Sources</div>
+            <div className="msg-sources-list">
+              {sourceItems.map((item) => (
+                <a
+                  key={`${item.url}-${item.title}`}
+                  href={item.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="msg-source-link"
+                >
+                  {item.title}
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
+        {!isUser && nextQuestions.length > 0 && (
+          <div className="msg-followup-wrap">
+            <div className="msg-followup-title">Next Questions</div>
+            <div className="msg-followup-chips">
+              {nextQuestions.map((question) => (
+                <button
+                  key={question}
+                  type="button"
+                  className="followup-chip"
+                  onClick={() => onFollowUpClick?.(question)}
+                >
+                  {question}
+                </button>
+              ))}
+            </div>
+          </div>
         )}
         <div className="msg-meta">
           <span className="msg-time">{formatTime(message.timestamp)}</span>
@@ -180,6 +309,7 @@ export default function HomePage() {
   const [searchProvider, setSearchProvider] = useState('None');
   const [isSearching, setIsSearching] = useState(false);
   const [ragUsed, setRagUsed] = useState(false);
+  const [researchUsed, setResearchUsed] = useState(false);
 
   // Image generation
   const [imageLoading, setImageLoading] = useState(false);
@@ -187,6 +317,7 @@ export default function HomePage() {
 
   // Sidebar
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(300);
   const [renamingId, setRenamingId] = useState(null);
   const [renameValue, setRenameValue] = useState('');
 
@@ -194,6 +325,7 @@ export default function HomePage() {
   const endRef = useRef(null);
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
+  const dragRef = useRef({ active: false, startX: 0, startWidth: 300 });
 
   // ===== Auth check =====
   useEffect(() => {
@@ -213,6 +345,19 @@ export default function HomePage() {
   useEffect(() => {
     setActiveProvider(providerLabel(provider));
   }, [provider]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const saved = Number(window.localStorage.getItem(SIDEBAR_WIDTH_KEY));
+    if (!Number.isFinite(saved)) return;
+    const clamped = Math.max(SIDEBAR_WIDTH_MIN, Math.min(SIDEBAR_WIDTH_MAX, saved));
+    setSidebarWidth(clamped);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(Math.round(sidebarWidth)));
+  }, [sidebarWidth]);
 
   // ===== Load chats =====
   useEffect(() => {
@@ -327,14 +472,85 @@ export default function HomePage() {
     textareaRef.current?.focus();
   }, []);
 
+  const beginSidebarResize = useCallback((clientX) => {
+    if (typeof window === 'undefined') return;
+    if (window.innerWidth <= 768) return;
+    dragRef.current = {
+      active: true,
+      startX: clientX,
+      startWidth: sidebarWidth,
+    };
+    document.body.style.cursor = 'col-resize';
+  }, [sidebarWidth]);
+
+  const onSidebarDividerMouseDown = useCallback((event) => {
+    event.preventDefault();
+    beginSidebarResize(event.clientX);
+  }, [beginSidebarResize]);
+
+  const onSidebarDividerTouchStart = useCallback((event) => {
+    const touch = event.touches?.[0];
+    if (!touch) return;
+    beginSidebarResize(touch.clientX);
+  }, [beginSidebarResize]);
+
+  useEffect(() => {
+    function stopResize() {
+      if (!dragRef.current.active) return;
+      dragRef.current.active = false;
+      document.body.style.cursor = '';
+    }
+
+    function onPointerMove(clientX) {
+      if (!dragRef.current.active) return;
+      const next = dragRef.current.startWidth + (clientX - dragRef.current.startX);
+      const clamped = Math.max(SIDEBAR_WIDTH_MIN, Math.min(SIDEBAR_WIDTH_MAX, next));
+      setSidebarWidth(clamped);
+    }
+
+    function onMouseMove(event) {
+      onPointerMove(event.clientX);
+    }
+
+    function onTouchMove(event) {
+      const touch = event.touches?.[0];
+      if (!touch) return;
+      onPointerMove(touch.clientX);
+    }
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', stopResize);
+    window.addEventListener('touchmove', onTouchMove, { passive: true });
+    window.addEventListener('touchend', stopResize);
+
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', stopResize);
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', stopResize);
+      document.body.style.cursor = '';
+    };
+  }, []);
+
   // ===== Send message =====
-  const sendMessage = useCallback(async () => {
-    const text = input.trim();
-    const hasImage = Boolean(selectedImage?.dataUrl);
+  const sendMessage = useCallback(async ({ action = 'chat' } = {}) => {
+    const requestedAction = action === 'practice' ? 'practice' : 'chat';
+    const activeChatTitle = chats.find((chat) => chat.id === activeChatId)?.title || '';
+    const latestUserSeed = [...messages]
+      .reverse()
+      .find((item) => item.role === 'user' && item.content)
+      ?.content;
+    const defaultPracticeTopic = String(latestUserSeed || activeChatTitle || 'general problem solving');
+    const text =
+      requestedAction === 'practice'
+        ? (input.trim() || defaultPracticeTopic)
+        : input.trim();
+    const hasImage = requestedAction === 'practice' ? false : Boolean(selectedImage?.dataUrl);
     if ((!text && !hasImage) || isLoading) return;
 
     setError('');
     setRagUsed(false);
+    setResearchUsed(false);
     setSearchProvider('None');
     let chatId = activeChatId;
 
@@ -369,10 +585,12 @@ export default function HomePage() {
     const allMessages = [...messages, userMessage];
     setMessages(allMessages);
     setInput('');
-    setSelectedImage(null);
+    if (requestedAction !== 'practice') {
+      setSelectedImage(null);
+    }
     setIsLoading(true);
     setStreamingText('');
-    setIsSearching(chatMode === 'search' || REALTIME_QUERY_PATTERN.test(text));
+    setIsSearching(chatMode === 'search' || chatMode === 'research' || REALTIME_QUERY_PATTERN.test(text));
 
     if (abortRef.current) abortRef.current.abort();
     const controller = new AbortController();
@@ -402,6 +620,7 @@ export default function HomePage() {
           mode: responseMode,
           responseMode,
           chatMode,
+          action: requestedAction,
         }),
         signal: controller.signal,
       });
@@ -417,6 +636,7 @@ export default function HomePage() {
       const usedSearchProvider = searchProviderLabel(res.headers.get('x-search-provider'));
       setActiveProvider(usedProvider);
       setRagUsed(res.headers.get('x-rag-used') === '1');
+      setResearchUsed(res.headers.get('x-research-used') === '1');
       setSearchProvider(usedSearchProvider);
       setIsSearching(false);
 
@@ -457,7 +677,7 @@ export default function HomePage() {
       setStreamingText('');
       abortRef.current = null;
     }
-  }, [input, isLoading, messages, activeChatId, provider, responseMode, chatMode, selectedImage]);
+  }, [input, isLoading, chats, messages, activeChatId, provider, responseMode, chatMode, selectedImage]);
 
   // ===== Generate Image =====
   const generateImage = useCallback(async () => {
@@ -592,6 +812,17 @@ export default function HomePage() {
     URL.revokeObjectURL(url);
   }, [messages, chats, activeChatId]);
 
+  const applyFollowUpQuestion = useCallback((question) => {
+    if (!question) return;
+    setInput(question);
+    textareaRef.current?.focus();
+  }, []);
+
+  const generatePracticeSet = useCallback(() => {
+    if (isLoading || imageLoading) return;
+    sendMessage({ action: 'practice' });
+  }, [isLoading, imageLoading, sendMessage]);
+
   // ===== Keydown =====
   const onKeyDown = useCallback((e) => {
     if (e.key === 'Enter' && !e.shiftKey && !isLoading) {
@@ -620,7 +851,10 @@ export default function HomePage() {
   return (
     <>
       <div className="bg-glow" />
-      <div className="app-layout">
+      <div
+        className="app-layout"
+        style={{ '--sidebar-width': `${Math.round(sidebarWidth)}px` }}
+      >
         {/* Mobile overlay */}
         <div
           className={`mobile-overlay ${sidebarOpen ? 'visible' : ''}`}
@@ -628,7 +862,10 @@ export default function HomePage() {
         />
 
         {/* ===== SIDEBAR ===== */}
-        <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
+        <aside
+          className={`sidebar ${sidebarOpen ? 'open' : ''}`}
+          style={{ width: `${Math.round(sidebarWidth)}px`, minWidth: `${Math.round(sidebarWidth)}px` }}
+        >
           <div className="sidebar-header">
             <div className="sidebar-brand">
               <img src="/logo.png" alt="Arithmo" />
@@ -704,6 +941,15 @@ export default function HomePage() {
           </div>
         </aside>
 
+        <div
+          className="sidebar-resizer"
+          onMouseDown={onSidebarDividerMouseDown}
+          onTouchStart={onSidebarDividerTouchStart}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize sidebar"
+        />
+
         {/* ===== MAIN AREA ===== */}
         <main className="main-area">
           <header className="app-header">
@@ -734,6 +980,7 @@ export default function HomePage() {
               >
                 <option value="chat">Chat Mode</option>
                 <option value="search">Search Mode (RAG/SerpAPI)</option>
+                <option value="research">Research Mode (Deep Brief)</option>
               </select>
               <select
                 className="model-select"
@@ -757,6 +1004,7 @@ export default function HomePage() {
               <span className="status-badge online">Using: {activeProvider}</span>
               {ragUsed && <span className="status-badge online">RAG</span>}
               {ragUsed && <span className="status-badge online">Search: {searchProvider}</span>}
+              {researchUsed && <span className="status-badge online">Research</span>}
               {activeChatId && messages.length > 0 && (
                 <button
                   className="theme-toggle"
@@ -795,7 +1043,11 @@ export default function HomePage() {
             )}
 
             {visibleMessages.map((msg) => (
-              <MessageBubble key={msg.id} message={msg} />
+              <MessageBubble
+                key={msg.id}
+                message={msg}
+                onFollowUpClick={applyFollowUpQuestion}
+              />
             ))}
 
             {isLoading && !streamingText && (
@@ -812,6 +1064,17 @@ export default function HomePage() {
           {error && <div className="error-banner">Warning: {error}</div>}
 
           <div className="input-area">
+            <div className="composer-actions">
+              <button
+                type="button"
+                className="practice-btn"
+                onClick={generatePracticeSet}
+                disabled={isLoading || imageLoading}
+                title="Generate 5 practice questions with answers"
+              >
+                Generate Practice
+              </button>
+            </div>
             {selectedImage && (
               <div className="image-chip">
                 <img src={selectedImage.dataUrl} alt={selectedImage.name || 'Attached image'} />

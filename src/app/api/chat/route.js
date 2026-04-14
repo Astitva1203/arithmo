@@ -8,6 +8,7 @@ import {
   formatSearchResultsForPrompt,
   formatSourcesMarkdown,
   runWebSearch,
+  summarizeSearchFailure,
   shouldUseWebSearch,
 } from '@/services/search/webSearch';
 
@@ -67,6 +68,8 @@ const TITLE_REFINE_SEED_LIMIT = 8;
 const DAILY_IMAGE_LIMIT = Number(process.env.DAILY_IMAGE_LIMIT || 3);
 const FREEPIK_POLL_INTERVAL_MS = 1_500;
 const FREEPIK_POLL_TIMEOUT_MS = 45_000;
+const ACTION_CHAT = 'chat';
+const ACTION_PRACTICE = 'practice';
 
 function sanitizeText(value) {
   if (typeof value !== 'string') return '';
@@ -191,8 +194,16 @@ function normalizeChatMode(value) {
   const mode = String(value || '')
     .trim()
     .toLowerCase();
-  if (mode === 'search' || mode === 'chat') return mode;
+  if (mode === 'search' || mode === 'chat' || mode === 'research') return mode;
   return 'chat';
+}
+
+function normalizeAction(value) {
+  const action = String(value || '')
+    .trim()
+    .toLowerCase();
+  if (action === ACTION_PRACTICE) return ACTION_PRACTICE;
+  return ACTION_CHAT;
 }
 
 function normalizeCommandText(text) {
@@ -263,7 +274,14 @@ function applyInstantDifficultyCommand(messages) {
   return { messages: rewritten, command };
 }
 
-function buildSystemPrompt({ responseMode, difficultyShift, searchContext }) {
+function buildSystemPrompt({
+  responseMode,
+  difficultyShift,
+  chatMode,
+  searchContext,
+  searchFailed,
+  searchError,
+}) {
   const modeBlock =
     responseMode === 'speed'
       ? `SPEED MODE:
@@ -290,12 +308,33 @@ function buildSystemPrompt({ responseMode, difficultyShift, searchContext }) {
   const reasoningGuard =
     'Do not output hidden reasoning, scratchpad, chain-of-thought, or internal deliberation. Provide only the final helpful answer.';
 
+  const modeInstruction =
+    chatMode === 'research'
+      ? `RESEARCH MODE REQUIREMENTS:
+- Provide sections in this exact order: Summary, Key Points, Perspectives, Conclusion.
+- Use evidence from the provided sources and synthesize insights.
+- Keep claims grounded in sources; avoid speculation.
+- End with "Sources" and markdown links.`
+      : chatMode === 'search'
+        ? `SEARCH MODE REQUIREMENTS:
+- Give a concise, accurate answer grounded in provided evidence.
+- End with "Sources" and markdown links.
+- Do not copy snippets verbatim; synthesize findings.`
+        : `CHAT MODE REQUIREMENTS:
+- Use normal tutoring behavior unless real-time evidence is provided.`;
+
   const searchBlock = searchContext
     ? `Real-time web context (use these findings as grounding for freshness):
 ${searchContext}
 
 If web context is used, include a short "Sources" section with links.`
     : 'No external web context was provided for this turn.';
+
+  const freshnessBlock =
+    searchFailed && (chatMode === 'search' || chatMode === 'research')
+      ? `Search retrieval failed this turn. Mention freshness limits briefly and continue with best-effort knowledge.
+Search issue: ${searchError || 'unknown error'}.`
+      : '';
 
   return `${BASE_SYSTEM_PROMPT}
 
@@ -305,7 +344,11 @@ ${difficultyBlock}
 
 ${reasoningGuard}
 
-${searchBlock}`;
+${modeInstruction}
+
+${searchBlock}
+
+${freshnessBlock}`;
 }
 
 function hasConfidenceMeter(text) {
@@ -343,7 +386,7 @@ function normalizeProvider(value) {
 
 function normalizeGeneratedTitle(rawTitle, fallback) {
   const cleaned = String(rawTitle || '')
-    .replace(/[`"'“”‘’]/g, '')
+    .replace(/["'“”‘’]/g, '')
     .replace(/[:;.,!?/\\|[\]{}()<>-]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -540,6 +583,64 @@ function appendSourcesIfNeeded(responseText, sourcesMarkdown, sourceUrls) {
   return `${text}\n\n${sourcesMarkdown}`.trim();
 }
 
+function appendSectionIfMissing(responseText, header, body) {
+  const text = String(responseText || '');
+  if (!body) return text;
+  const hasSection = new RegExp(`\\b${header}\\s*:`, 'i').test(text);
+  if (hasSection) return text;
+  return `${text}\n\n${header}:\n${body}`.trim();
+}
+
+function enforceResearchSections(responseText, topicText) {
+  let text = String(responseText || '').trim();
+  const topic = sanitizeText(topicText || 'the topic');
+
+  text = appendSectionIfMissing(text, 'Summary', `A concise overview of ${topic}.`);
+  text = appendSectionIfMissing(
+    text,
+    'Key Points',
+    ['- Core facts and definitions', '- Most important developments', '- Practical takeaway'].join('\n')
+  );
+  text = appendSectionIfMissing(
+    text,
+    'Perspectives',
+    ['- Current viewpoint', '- Alternative interpretation', '- Common limitation or caveat'].join('\n')
+  );
+  text = appendSectionIfMissing(text, 'Conclusion', `A grounded conclusion for ${topic}.`);
+
+  return text;
+}
+
+function buildNextQuestionSuggestions(topicText) {
+  const topic = sanitizeText(topicText || 'this topic').slice(0, 120) || 'this topic';
+  return [
+    `- What are the latest updates related to ${topic}?`,
+    `- How does ${topic} compare with previous trends?`,
+    `- What should I learn next about ${topic}?`,
+  ].join('\n');
+}
+
+function applyPracticeAction(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) return messages;
+  const latestIndex = messages.length - 1;
+  const latest = messages[latestIndex];
+  const latestText = getMessageText(latest?.content) || 'general problem solving';
+
+  const rewritten = [...messages];
+  rewritten[latestIndex] = {
+    ...latest,
+    role: 'user',
+    content: `Generate a practice set on: ${latestText}
+
+Return exactly:
+1) Five practice questions
+2) Answer key
+3) Difficulty notes (easy, medium, or hard for each question)
+4) One short improvement tip`,
+  };
+  return rewritten;
+}
+
 export async function POST(request) {
   try {
     let body;
@@ -609,9 +710,21 @@ export async function POST(request) {
     const chatId = body?.chatId || null;
     const requestedProvider = normalizeProvider(body?.provider);
     const chatMode = normalizeChatMode(body?.chatMode);
+    const action = normalizeAction(body?.action);
 
-    const { messages: effectiveMessages } = applyInstantDifficultyCommand(safeMessages);
+    const difficultyAdjusted = applyInstantDifficultyCommand(safeMessages).messages;
+    const effectiveMessages =
+      action === ACTION_PRACTICE ? applyPracticeAction(difficultyAdjusted) : difficultyAdjusted;
     const latestUserText = getLatestUserText(effectiveMessages);
+    if (!latestUserText && !hasImageInput) {
+      return NextResponse.json({ error: 'Message content is required.' }, { status: 400 });
+    }
+    if (action === ACTION_PRACTICE && hasImageInput) {
+      return NextResponse.json(
+        { error: 'Practice generation does not support image attachments in the same request.' },
+        { status: 400 }
+      );
+    }
     const requestedResponseMode = normalizeResponseMode(body?.responseMode || body?.mode);
     const responseMode = requestedResponseMode || inferResponseMode(latestUserText);
     const difficultyShift = getDifficultyShift(safeMessages);
@@ -626,7 +739,12 @@ export async function POST(request) {
     };
 
     if (wantSearch && latestUserText) {
-      searchResult = await runWebSearch({ query: latestUserText, limit: 5, timeoutMs: 10_000 });
+      searchResult = await runWebSearch({
+        query: latestUserText,
+        limit: chatMode === 'research' ? 5 : 5,
+        timeoutMs: 10_000,
+        mode: chatMode,
+      });
     }
 
     const searchContext = searchResult.used
@@ -638,7 +756,10 @@ export async function POST(request) {
     const systemPrompt = buildSystemPrompt({
       responseMode,
       difficultyShift,
+      chatMode,
       searchContext,
+      searchFailed: wantSearch && !searchResult.used,
+      searchError: searchResult.error,
     });
 
     let routeResult;
@@ -746,11 +867,47 @@ export async function POST(request) {
           fullResponse += streamError;
           controller.enqueue(encoder.encode(streamError));
         } finally {
+          if (wantSearch && !searchResult.used && (chatMode === 'search' || chatMode === 'research')) {
+            const freshnessNote = appendSectionIfMissing(
+              fullResponse,
+              'Freshness Notice',
+              summarizeSearchFailure(searchResult.error)
+            );
+            if (freshnessNote !== fullResponse) {
+              const suffix = freshnessNote.slice(fullResponse.length);
+              fullResponse = freshnessNote;
+              if (suffix) controller.enqueue(encoder.encode(suffix));
+            }
+          }
+
           if (searchResult.used && searchResult.results?.length) {
             const withSources = appendSourcesIfNeeded(fullResponse, sourcesMarkdown, sourceUrls);
             if (withSources !== fullResponse) {
               const suffix = withSources.slice(fullResponse.length);
               fullResponse = withSources;
+              if (suffix) controller.enqueue(encoder.encode(suffix));
+            }
+          }
+
+          if (chatMode === 'research') {
+            const withResearchSections = enforceResearchSections(fullResponse, latestUserText);
+            if (withResearchSections !== fullResponse) {
+              const suffix = withResearchSections.slice(fullResponse.length);
+              fullResponse = withResearchSections;
+              if (suffix) controller.enqueue(encoder.encode(suffix));
+            }
+          }
+
+          if (chatMode === 'search' || chatMode === 'research') {
+            const nextQuestionsBlock = buildNextQuestionSuggestions(latestUserText);
+            const withNextQuestions = appendSectionIfMissing(
+              fullResponse,
+              'Next Questions',
+              nextQuestionsBlock
+            );
+            if (withNextQuestions !== fullResponse) {
+              const suffix = withNextQuestions.slice(fullResponse.length);
+              fullResponse = withNextQuestions;
               if (suffix) controller.enqueue(encoder.encode(suffix));
             }
           }
@@ -780,7 +937,10 @@ export async function POST(request) {
                   role: 'assistant',
                   content: fullResponse,
                   provider: providerUsed,
+                  mode: chatMode,
+                  action,
                   ragUsed: Boolean(searchResult.used),
+                  researchUsed: chatMode === 'research' && Boolean(searchResult.used),
                   sources: searchResult.results || [],
                   timestamp: new Date(now.getTime() + 1),
                 },
@@ -869,6 +1029,7 @@ export async function POST(request) {
         'x-ai-provider': providerUsed,
         'x-rag-used': searchResult.used ? '1' : '0',
         'x-search-provider': searchResult.provider || 'none',
+        'x-research-used': chatMode === 'research' && searchResult.used ? '1' : '0',
       },
     });
   } catch (error) {
@@ -878,3 +1039,4 @@ export async function POST(request) {
     );
   }
 }
+
