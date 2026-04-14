@@ -4,7 +4,7 @@ Arithmo is a full-stack AI chatbot with a modern liquid glass UI, streaming resp
 
 ## Key Features
 
-- Multi-provider AI chat: Groq + NVIDIA
+- Multi-provider AI chat: Groq + Gemini + NVIDIA
 - Intelligent provider routing (auto mode)
 - Bidirectional fallback with retry:
   - Groq -> NVIDIA
@@ -22,6 +22,7 @@ Arithmo is a full-stack AI chatbot with a modern liquid glass UI, streaming resp
 ## Architecture
 
 - `src/services/ai/groqService.js`
+- `src/services/ai/geminiService.js`
 - `src/services/ai/nvidiaService.js`
 - `src/router/aiRouter.js`
 - `src/services/search/webSearch.js`
@@ -46,6 +47,8 @@ Required:
 Optional:
 
 - `NVIDIA_API_KEY` (for NVIDIA provider)
+- `GEMINI_API_KEY` (for Gemini provider)
+- `GEMINI_MODEL` (default: `gemini-3-flash-preview`)
 - `FREEPIK_API_KEY` (image generation)
 - `SERPAPI_KEY` (preferred web search)
 - `BING_SEARCH_API_KEY` (fallback web search)
@@ -74,7 +77,7 @@ npm run start
 - Provider `auto`:
   - Simpler prompts prefer Groq (speed)
   - Complex prompts prefer NVIDIA (depth)
-- If selected provider fails, Arithmo retries once then switches provider.
+- If selected provider fails, Arithmo retries once then switches provider (Groq/Gemini/NVIDIA).
 - Search Mode:
   - Performs web search when mode is `search` or query looks real-time (`latest`, `news`, `today`, etc.)
   - Injects top web findings into system context

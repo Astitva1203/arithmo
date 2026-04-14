@@ -3,6 +3,7 @@ import { getDb } from '@/lib/mongodb';
 import { getAuthUser } from '@/lib/auth';
 import { AiRouterError, routeChatRequest } from '@/router/aiRouter';
 import { isGroqConfigured, requestGroqChatCompletion } from '@/services/ai/groqService';
+import { isGeminiConfigured, requestGeminiChatCompletion } from '@/services/ai/geminiService';
 import { isNvidiaConfigured, requestNvidiaChatCompletion } from '@/services/ai/nvidiaService';
 import {
   formatSearchResultsForPrompt,
@@ -380,7 +381,9 @@ function parseStreamToken(payload) {
 
 function normalizeProvider(value) {
   const provider = String(value || 'auto').trim().toLowerCase();
-  if (provider === 'groq' || provider === 'nvidia' || provider === 'auto') return provider;
+  if (provider === 'groq' || provider === 'gemini' || provider === 'nvidia' || provider === 'auto') {
+    return provider;
+  }
   return 'auto';
 }
 
@@ -418,13 +421,18 @@ function normalizeTitleForCompare(title) {
 function resolveTitleProvider(preferredProvider) {
   const preferred = normalizeProvider(preferredProvider);
   if (preferred === 'groq' && isGroqConfigured()) return 'groq';
+  if (preferred === 'gemini' && isGeminiConfigured()) return 'gemini';
   if (preferred === 'nvidia' && isNvidiaConfigured()) return 'nvidia';
   if (isGroqConfigured()) return 'groq';
+  if (isGeminiConfigured()) return 'gemini';
   if (isNvidiaConfigured()) return 'nvidia';
   return null;
 }
 
 async function completeWithProvider(provider, payload) {
+  if (provider === 'gemini') {
+    return requestGeminiChatCompletion(payload);
+  }
   if (provider === 'nvidia') {
     return requestNvidiaChatCompletion(payload);
   }

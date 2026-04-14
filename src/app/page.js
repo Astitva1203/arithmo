@@ -2,24 +2,20 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
 import { useTheme } from '@/components/ThemeProvider';
+import ChatComposer from '@/components/chat/ChatComposer';
+import ChatHeader from '@/components/chat/ChatHeader';
+import ChatSidebar from '@/components/chat/ChatSidebar';
+import EmptyState from '@/components/chat/EmptyState';
+import MessageBubble from '@/components/chat/MessageBubble';
+import TypingIndicator from '@/components/chat/TypingIndicator';
+import { triggerHaptic } from '@/lib/haptics';
 
 function createId() {
   return `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function formatTime(ts) {
-  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
-
 const MAX_ATTACH_IMAGE_SIZE = 4 * 1024 * 1024;
-const SIDEBAR_WIDTH_KEY = 'arithmo_sidebar_width';
-const SIDEBAR_WIDTH_MIN = 240;
-const SIDEBAR_WIDTH_MAX = 460;
 const REALTIME_QUERY_PATTERN =
   /\b(latest|news|today|current|updates?|recent|happening|new|trend(?:ing)?|this week|this month)\b/i;
 
@@ -35,6 +31,7 @@ function fileToDataUrl(file) {
 function providerLabel(value) {
   const normalized = String(value || '').toLowerCase();
   if (normalized === 'groq') return 'Groq';
+  if (normalized === 'gemini') return 'Gemini';
   if (normalized === 'nvidia') return 'NVIDIA';
   return 'Auto';
 }
@@ -46,244 +43,6 @@ function searchProviderLabel(value) {
   return 'None';
 }
 
-const KNOWN_SECTIONS = [
-  'Summary',
-  'Key Points',
-  'Perspectives',
-  'Conclusion',
-  'Sources',
-  'Next Questions',
-  'Confidence',
-  'Reason',
-];
-
-function escapeRegex(value) {
-  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function extractSection(text, sectionName) {
-  const content = String(text || '');
-  if (!content) return '';
-  const heading = escapeRegex(sectionName);
-  const otherHeadings = KNOWN_SECTIONS.filter((item) => item !== sectionName)
-    .map((item) => escapeRegex(item))
-    .join('|');
-  const pattern = new RegExp(
-    `(?:^|\\n)${heading}\\s*:\\s*\\n([\\s\\S]*?)(?=\\n(?:${otherHeadings})\\s*:|$)`,
-    'i'
-  );
-  const match = content.match(pattern);
-  return match?.[1]?.trim() || '';
-}
-
-function removeSection(text, sectionName) {
-  const content = String(text || '');
-  if (!content) return '';
-  const heading = escapeRegex(sectionName);
-  const otherHeadings = KNOWN_SECTIONS.filter((item) => item !== sectionName)
-    .map((item) => escapeRegex(item))
-    .join('|');
-  const pattern = new RegExp(
-    `(?:^|\\n)${heading}\\s*:\\s*\\n[\\s\\S]*?(?=\\n(?:${otherHeadings})\\s*:|$)`,
-    'i'
-  );
-  return content.replace(pattern, '').replace(/\n{3,}/g, '\n\n').trim();
-}
-
-function parseMarkdownSources(sectionText) {
-  const input = String(sectionText || '');
-  if (!input) return [];
-
-  const markdownMatches = [...input.matchAll(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/gi)];
-  if (markdownMatches.length > 0) {
-    return markdownMatches.map((match) => ({
-      title: match[1].trim(),
-      url: match[2].trim(),
-    }));
-  }
-
-  const lines = input
-    .split('\n')
-    .map((line) => line.replace(/^[-*]\s*/, '').trim())
-    .filter(Boolean);
-
-  return lines
-    .map((line) => {
-      const urlMatch = line.match(/https?:\/\/\S+/i);
-      if (!urlMatch) return null;
-      const url = urlMatch[0];
-      const title = line.replace(url, '').replace(/[-–—:]/g, ' ').trim() || url;
-      return { title, url };
-    })
-    .filter(Boolean);
-}
-
-function parseBulletLines(sectionText) {
-  return String(sectionText || '')
-    .split('\n')
-    .map((line) => line.replace(/^[-*]\s*/, '').trim())
-    .filter(Boolean);
-}
-
-/* ===== KATEX RENDERING ===== */
-function renderLatex(text) {
-  if (typeof window === 'undefined' || typeof text !== 'string') return text;
-  try {
-    const katex = require('katex');
-    // Display math $$...$$
-    let result = text.replace(/\$\$([\s\S]+?)\$\$/g, (_, math) => {
-      try {
-        return katex.renderToString(math.trim(), { displayMode: true, throwOnError: false });
-      } catch { return _; }
-    });
-    // Inline math $...$
-    result = result.replace(/\$([^\$\n]+?)\$/g, (_, math) => {
-      try {
-        return katex.renderToString(math.trim(), { displayMode: false, throwOnError: false });
-      } catch { return _; }
-    });
-    return result;
-  } catch { return text; }
-}
-
-/* ===== CODE BLOCK ===== */
-function CodeBlock({ className, children, inline, ...props }) {
-  const match = /language-(\w+)/.exec(className || '');
-  const [copied, setCopied] = useState(false);
-  const lang = match?.[1] || 'text';
-  const code = String(children).replace(/\n$/, '');
-
-  if (inline) {
-    return <code className={className} {...props}>{children}</code>;
-  }
-
-  function handleCopy() {
-    navigator.clipboard.writeText(code).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  }
-
-  return (
-    <div className="code-block-wrap">
-      <div className="code-block-header">
-        <span className="code-lang">{lang}</span>
-        <button className="code-copy-btn" onClick={handleCopy}>
-          {copied ? 'Copied' : 'Copy'}
-        </button>
-      </div>
-      <SyntaxHighlighter
-        style={oneDark}
-        language={lang}
-        PreTag="div"
-        customStyle={{ margin: 0, borderRadius: '0 0 14px 14px' }}
-      >
-        {code}
-      </SyntaxHighlighter>
-    </div>
-  );
-}
-
-/* ===== MESSAGE COMPONENT ===== */
-function MessageBubble({ message, onFollowUpClick }) {
-  const isUser = message.role === 'user';
-  const [copied, setCopied] = useState(false);
-  const imageSrc = message.imageDataUrl || message.imageUrl || '';
-  const sourceItems = useMemo(
-    () => parseMarkdownSources(extractSection(message.content, 'Sources')).slice(0, 5),
-    [message.content]
-  );
-  const nextQuestions = useMemo(
-    () => parseBulletLines(extractSection(message.content, 'Next Questions')).slice(0, 3),
-    [message.content]
-  );
-  const markdownText = useMemo(() => {
-    if (isUser) return message.content;
-    return removeSection(removeSection(message.content, 'Sources'), 'Next Questions');
-  }, [isUser, message.content]);
-
-  function handleCopy() {
-    navigator.clipboard.writeText(message.content).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  }
-
-  return (
-    <div className={`msg-row ${isUser ? 'user' : 'assistant'}`}>
-      <div className={`msg-bubble ${isUser ? 'user' : 'assistant'}`}>
-        {imageSrc && (
-          <div className="msg-image-wrap">
-            <img src={imageSrc} alt={isUser ? 'Attached image' : 'Generated image'} />
-          </div>
-        )}
-        {isUser ? (
-          <p>{message.content}</p>
-        ) : (
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            components={{
-              code: CodeBlock,
-              p: ({ children }) => {
-                if (typeof children === 'string') {
-                  return <p dangerouslySetInnerHTML={{ __html: renderLatex(children) }} />;
-                }
-                return <p>{children}</p>;
-              },
-            }}
-          >
-            {markdownText}
-          </ReactMarkdown>
-        )}
-        {!isUser && sourceItems.length > 0 && (
-          <div className="msg-sources-panel">
-            <div className="msg-sources-title">Sources</div>
-            <div className="msg-sources-list">
-              {sourceItems.map((item) => (
-                <a
-                  key={`${item.url}-${item.title}`}
-                  href={item.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="msg-source-link"
-                >
-                  {item.title}
-                </a>
-              ))}
-            </div>
-          </div>
-        )}
-        {!isUser && nextQuestions.length > 0 && (
-          <div className="msg-followup-wrap">
-            <div className="msg-followup-title">Next Questions</div>
-            <div className="msg-followup-chips">
-              {nextQuestions.map((question) => (
-                <button
-                  key={question}
-                  type="button"
-                  className="followup-chip"
-                  onClick={() => onFollowUpClick?.(question)}
-                >
-                  {question}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-        <div className="msg-meta">
-          <span className="msg-time">{formatTime(message.timestamp)}</span>
-          {!isUser && (
-            <button className={`copy-btn ${copied ? 'copied' : ''}`} onClick={handleCopy}>
-              {copied ? 'Copied' : 'Copy'}
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ===== MAIN PAGE ===== */
 export default function HomePage() {
   const router = useRouter();
   const { theme, toggleTheme } = useTheme();
@@ -310,14 +69,16 @@ export default function HomePage() {
   const [isSearching, setIsSearching] = useState(false);
   const [ragUsed, setRagUsed] = useState(false);
   const [researchUsed, setResearchUsed] = useState(false);
+  const [chatPhase, setChatPhase] = useState('idle');
 
   // Image generation
   const [imageLoading, setImageLoading] = useState(false);
   const [selectedImage, setSelectedImage] = useState(null);
+  const [canUseVoiceInput, setCanUseVoiceInput] = useState(false);
+  const [isListening, setIsListening] = useState(false);
 
   // Sidebar
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState(300);
   const [renamingId, setRenamingId] = useState(null);
   const [renameValue, setRenameValue] = useState('');
 
@@ -325,7 +86,8 @@ export default function HomePage() {
   const endRef = useRef(null);
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
-  const dragRef = useRef({ active: false, startX: 0, startWidth: 300 });
+  const speechRecognitionRef = useRef(null);
+  const voiceBaseInputRef = useRef('');
 
   // ===== Auth check =====
   useEffect(() => {
@@ -345,19 +107,6 @@ export default function HomePage() {
   useEffect(() => {
     setActiveProvider(providerLabel(provider));
   }, [provider]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const saved = Number(window.localStorage.getItem(SIDEBAR_WIDTH_KEY));
-    if (!Number.isFinite(saved)) return;
-    const clamped = Math.max(SIDEBAR_WIDTH_MIN, Math.min(SIDEBAR_WIDTH_MAX, saved));
-    setSidebarWidth(clamped);
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(Math.round(sidebarWidth)));
-  }, [sidebarWidth]);
 
   // ===== Load chats =====
   useEffect(() => {
@@ -400,6 +149,73 @@ export default function HomePage() {
   useEffect(() => {
     if (!authLoading && user) textareaRef.current?.focus();
   }, [authLoading, user, activeChatId]);
+
+  // ===== Voice input =====
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setCanUseVoiceInput(false);
+      return;
+    }
+
+    setCanUseVoiceInput(true);
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = window.navigator.language || 'en-US';
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+
+    recognition.onstart = () => {
+      setIsListening(true);
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+    };
+
+    recognition.onerror = (event) => {
+      const reason = String(event?.error || '');
+      if (reason === 'not-allowed' || reason === 'service-not-allowed') {
+        setError('Microphone permission is blocked. Please allow mic access and try again.');
+        return;
+      }
+      if (reason === 'no-speech') {
+        setError('No speech detected. Try speaking closer to your microphone.');
+        return;
+      }
+      setError('Voice input failed. Please try again.');
+    };
+
+    recognition.onresult = (event) => {
+      let transcript = '';
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        transcript += event.results[i]?.[0]?.transcript || '';
+      }
+
+      const normalizedTranscript = transcript.trim();
+      const base = String(voiceBaseInputRef.current || '').trim();
+      if (!normalizedTranscript && !base) return;
+
+      setInput(base ? `${base} ${normalizedTranscript}`.trim() : normalizedTranscript);
+      textareaRef.current?.focus();
+    };
+
+    speechRecognitionRef.current = recognition;
+
+    return () => {
+      recognition.onstart = null;
+      recognition.onend = null;
+      recognition.onerror = null;
+      recognition.onresult = null;
+      try {
+        recognition.stop();
+      } catch {}
+      speechRecognitionRef.current = null;
+    };
+  }, []);
 
   // ===== Visible messages =====
   const visibleMessages = useMemo(() => {
@@ -472,68 +288,8 @@ export default function HomePage() {
     textareaRef.current?.focus();
   }, []);
 
-  const beginSidebarResize = useCallback((clientX) => {
-    if (typeof window === 'undefined') return;
-    if (window.innerWidth <= 768) return;
-    dragRef.current = {
-      active: true,
-      startX: clientX,
-      startWidth: sidebarWidth,
-    };
-    document.body.style.cursor = 'col-resize';
-  }, [sidebarWidth]);
-
-  const onSidebarDividerMouseDown = useCallback((event) => {
-    event.preventDefault();
-    beginSidebarResize(event.clientX);
-  }, [beginSidebarResize]);
-
-  const onSidebarDividerTouchStart = useCallback((event) => {
-    const touch = event.touches?.[0];
-    if (!touch) return;
-    beginSidebarResize(touch.clientX);
-  }, [beginSidebarResize]);
-
-  useEffect(() => {
-    function stopResize() {
-      if (!dragRef.current.active) return;
-      dragRef.current.active = false;
-      document.body.style.cursor = '';
-    }
-
-    function onPointerMove(clientX) {
-      if (!dragRef.current.active) return;
-      const next = dragRef.current.startWidth + (clientX - dragRef.current.startX);
-      const clamped = Math.max(SIDEBAR_WIDTH_MIN, Math.min(SIDEBAR_WIDTH_MAX, next));
-      setSidebarWidth(clamped);
-    }
-
-    function onMouseMove(event) {
-      onPointerMove(event.clientX);
-    }
-
-    function onTouchMove(event) {
-      const touch = event.touches?.[0];
-      if (!touch) return;
-      onPointerMove(touch.clientX);
-    }
-
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', stopResize);
-    window.addEventListener('touchmove', onTouchMove, { passive: true });
-    window.addEventListener('touchend', stopResize);
-
-    return () => {
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', stopResize);
-      window.removeEventListener('touchmove', onTouchMove);
-      window.removeEventListener('touchend', stopResize);
-      document.body.style.cursor = '';
-    };
-  }, []);
-
   // ===== Send message =====
-  const sendMessage = useCallback(async ({ action = 'chat' } = {}) => {
+  const sendMessage = useCallback(async ({ action = 'chat', textOverride = '' } = {}) => {
     const requestedAction = action === 'practice' ? 'practice' : 'chat';
     const activeChatTitle = chats.find((chat) => chat.id === activeChatId)?.title || '';
     const latestUserSeed = [...messages]
@@ -541,17 +297,26 @@ export default function HomePage() {
       .find((item) => item.role === 'user' && item.content)
       ?.content;
     const defaultPracticeTopic = String(latestUserSeed || activeChatTitle || 'general problem solving');
+    const normalizedInput = String(textOverride || input).trim();
     const text =
       requestedAction === 'practice'
-        ? (input.trim() || defaultPracticeTopic)
-        : input.trim();
+        ? (normalizedInput || defaultPracticeTopic)
+        : normalizedInput;
     const hasImage = requestedAction === 'practice' ? false : Boolean(selectedImage?.dataUrl);
     if ((!text && !hasImage) || isLoading) return;
 
+    if (isListening && speechRecognitionRef.current) {
+      try {
+        speechRecognitionRef.current.stop();
+      } catch {}
+    }
+
+    triggerHaptic('Medium');
     setError('');
     setRagUsed(false);
     setResearchUsed(false);
     setSearchProvider('None');
+    setChatPhase(chatMode === 'search' || chatMode === 'research' ? 'searching' : 'generating');
     let chatId = activeChatId;
 
     // Create a chat if none active
@@ -590,7 +355,11 @@ export default function HomePage() {
     }
     setIsLoading(true);
     setStreamingText('');
-    setIsSearching(chatMode === 'search' || chatMode === 'research' || REALTIME_QUERY_PATTERN.test(text));
+    const shouldSearch =
+      chatMode === 'search' ||
+      chatMode === 'research' ||
+      REALTIME_QUERY_PATTERN.test(text);
+    setIsSearching(shouldSearch);
 
     if (abortRef.current) abortRef.current.abort();
     const controller = new AbortController();
@@ -634,11 +403,14 @@ export default function HomePage() {
 
       const usedProvider = providerLabel(res.headers.get('x-ai-provider'));
       const usedSearchProvider = searchProviderLabel(res.headers.get('x-search-provider'));
+      const didUseRag = res.headers.get('x-rag-used') === '1';
+      const didUseResearch = res.headers.get('x-research-used') === '1';
       setActiveProvider(usedProvider);
-      setRagUsed(res.headers.get('x-rag-used') === '1');
-      setResearchUsed(res.headers.get('x-research-used') === '1');
+      setRagUsed(didUseRag);
+      setResearchUsed(didUseResearch);
       setSearchProvider(usedSearchProvider);
       setIsSearching(false);
+      setChatPhase('generating');
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -658,8 +430,17 @@ export default function HomePage() {
 
       setMessages((prev) => [
         ...prev,
-        { id: createId(), role: 'assistant', content: full, timestamp: Date.now() },
+        {
+          id: createId(),
+          role: 'assistant',
+          content: full,
+          timestamp: Date.now(),
+          mode: chatMode,
+          ragUsed: didUseRag,
+          researchUsed: didUseResearch,
+        },
       ]);
+      setChatPhase('complete');
 
       // Refresh chat list to get auto-title
       fetch('/api/chats')
@@ -671,13 +452,14 @@ export default function HomePage() {
       if (err?.name === 'AbortError') return;
       const msg = err?.message || 'Something went wrong.';
       setError(msg);
+      setChatPhase('error');
     } finally {
       setIsLoading(false);
       setIsSearching(false);
       setStreamingText('');
       abortRef.current = null;
     }
-  }, [input, isLoading, chats, messages, activeChatId, provider, responseMode, chatMode, selectedImage]);
+  }, [input, isLoading, chats, messages, activeChatId, provider, responseMode, chatMode, selectedImage, isListening]);
 
   // ===== Generate Image =====
   const generateImage = useCallback(async () => {
@@ -750,6 +532,8 @@ export default function HomePage() {
   const stopGeneration = useCallback(() => {
     if (abortRef.current) abortRef.current.abort();
     setIsLoading(false);
+    setIsSearching(false);
+    setChatPhase('idle');
     setStreamingText('');
   }, []);
 
@@ -823,6 +607,57 @@ export default function HomePage() {
     sendMessage({ action: 'practice' });
   }, [isLoading, imageLoading, sendMessage]);
 
+  const createSummaryPrompt = useCallback(() => {
+    setInput('Summarize this conversation with key takeaways and action items.');
+    textareaRef.current?.focus();
+    triggerHaptic('Light');
+  }, []);
+
+  const regenerateResponse = useCallback(() => {
+    if (isLoading || imageLoading) return;
+    sendMessage({ textOverride: 'Regenerate the previous answer with a fresh perspective and concise clarity.' });
+  }, [isLoading, imageLoading, sendMessage]);
+
+  const toggleDeepMode = useCallback(() => {
+    setResponseMode((prev) => (prev === 'deep' ? 'speed' : 'deep'));
+    triggerHaptic('Light');
+  }, []);
+
+  const handleMicTap = useCallback(() => {
+    if (!canUseVoiceInput || !speechRecognitionRef.current) {
+      setError('Voice input is not supported in this browser.');
+      triggerHaptic('Light');
+      return;
+    }
+
+    if (isLoading || imageLoading) return;
+
+    if (isListening) {
+      try {
+        speechRecognitionRef.current.stop();
+      } catch {}
+      triggerHaptic('Light');
+      return;
+    }
+
+    setError('');
+    voiceBaseInputRef.current = input;
+
+    try {
+      speechRecognitionRef.current.start();
+      triggerHaptic('Medium');
+    } catch {
+      setError('Could not start voice input. Please try again.');
+    }
+
+    textareaRef.current?.focus();
+  }, [canUseVoiceInput, isListening, isLoading, imageLoading, input]);
+
+  const handleModeChange = useCallback((nextMode) => {
+    setChatMode(nextMode);
+    triggerHaptic('Light');
+  }, []);
+
   // ===== Keydown =====
   const onKeyDown = useCallback((e) => {
     if (e.key === 'Enter' && !e.shiftKey && !isLoading) {
@@ -847,199 +682,66 @@ export default function HomePage() {
   if (!user) return null;
 
   const activeChat = chats.find((c) => c.id === activeChatId);
+  const isBusy = isLoading || imageLoading || isSearching;
 
   return (
     <>
       <div className="bg-glow" />
-      <div
-        className="app-layout"
-        style={{ '--sidebar-width': `${Math.round(sidebarWidth)}px` }}
-      >
-        {/* Mobile overlay */}
-        <div
-          className={`mobile-overlay ${sidebarOpen ? 'visible' : ''}`}
-          onClick={() => setSidebarOpen(false)}
+      <div className="app-layout">
+        <ChatSidebar
+          user={user}
+          chats={chats}
+          activeChatId={activeChatId}
+          renamingId={renamingId}
+          renameValue={renameValue}
+          onRenameValueChange={setRenameValue}
+          onSubmitRename={submitRename}
+          onCancelRename={() => setRenamingId(null)}
+          onSelectChat={(chatId) => {
+            setActiveChatId(chatId);
+            setError('');
+            setSidebarOpen(false);
+          }}
+          onStartRename={startRename}
+          onDeleteChat={deleteChat}
+          onCreateNewChat={createNewChat}
+          onLogout={handleLogout}
+          sidebarOpen={sidebarOpen}
+          onCloseSidebar={() => setSidebarOpen(false)}
         />
 
-        {/* ===== SIDEBAR ===== */}
-        <aside
-          className={`sidebar ${sidebarOpen ? 'open' : ''}`}
-          style={{ width: `${Math.round(sidebarWidth)}px`, minWidth: `${Math.round(sidebarWidth)}px` }}
-        >
-          <div className="sidebar-header">
-            <div className="sidebar-brand">
-              <img src="/logo.png" alt="Arithmo" />
-              <h2>Arithmo AI</h2>
-            </div>
-            <button className="new-chat-btn" onClick={createNewChat}>
-              + New Chat
-            </button>
-          </div>
-
-          <div className="sidebar-chats">
-            {chats.map((chat) => (
-              <div
-                key={chat.id}
-                className={`chat-item ${activeChatId === chat.id ? 'active' : ''}`}
-                onClick={() => {
-                  setActiveChatId(chat.id);
-                  setError('');
-                  setSidebarOpen(false);
-                }}
-              >
-                {renamingId === chat.id ? (
-                  <input
-                    className="rename-input"
-                    value={renameValue}
-                    onChange={(e) => setRenameValue(e.target.value)}
-                    onBlur={submitRename}
-                    onKeyDown={(e) => { if (e.key === 'Enter') submitRename(); if (e.key === 'Escape') setRenamingId(null); }}
-                    autoFocus
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                ) : (
-                  <>
-                    <span className="chat-item-title">{chat.title}</span>
-                    <div className="chat-item-actions">
-                      <button
-                        className="chat-action-btn"
-                        onClick={(e) => { e.stopPropagation(); startRename(chat); }}
-                        title="Rename"
-                      >
-                        Rename
-                      </button>
-                      <button
-                        className="chat-action-btn delete"
-                        onClick={(e) => { e.stopPropagation(); deleteChat(chat.id); }}
-                        title="Delete"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-            ))}
-            {chats.length === 0 && (
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', padding: '12px', textAlign: 'center' }}>
-                No chats yet. Start a conversation!
-              </p>
-            )}
-          </div>
-
-          <div className="sidebar-footer">
-            <div className="sidebar-user">
-              <div className="user-avatar">
-                {(user.name || user.email || '?')[0].toUpperCase()}
-              </div>
-              <div className="user-info">
-                <div className="user-name">{user.name}</div>
-                <div className="user-email">{user.email}</div>
-              </div>
-            </div>
-            <button className="logout-btn" onClick={handleLogout}>Sign Out</button>
-          </div>
-        </aside>
-
-        <div
-          className="sidebar-resizer"
-          onMouseDown={onSidebarDividerMouseDown}
-          onTouchStart={onSidebarDividerTouchStart}
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="Resize sidebar"
-        />
-
-        {/* ===== MAIN AREA ===== */}
         <main className="main-area">
-          <header className="app-header">
-            <div className="header-left">
-              <button className="mobile-menu-btn" onClick={() => setSidebarOpen(true)}>
-                Menu
-              </button>
-              <span className="chat-title">{activeChat?.title || 'Arithmo AI'}</span>
-            </div>
-            <div className="header-right">
-              <select
-                className="model-select"
-                value={provider}
-                onChange={(e) => setProvider(e.target.value)}
-                disabled={isLoading}
-                title="Choose AI provider"
-              >
-                <option value="auto">Auto</option>
-                <option value="groq">Groq (Llama 3.3)</option>
-                <option value="nvidia">NVIDIA (Nemotron)</option>
-              </select>
-              <select
-                className="model-select"
-                value={chatMode}
-                onChange={(e) => setChatMode(e.target.value)}
-                disabled={isLoading}
-                title="Choose chat mode"
-              >
-                <option value="chat">Chat Mode</option>
-                <option value="search">Search Mode (RAG/SerpAPI)</option>
-                <option value="research">Research Mode (Deep Brief)</option>
-              </select>
-              <select
-                className="model-select"
-                value={responseMode}
-                onChange={(e) => setResponseMode(e.target.value)}
-                disabled={isLoading}
-                title="Choose response mode"
-              >
-                <option value="deep">Deep Mode</option>
-                <option value="speed">Speed Mode</option>
-              </select>
-              <span className={`status-badge ${isLoading || imageLoading || isSearching ? 'thinking' : 'online'}`}>
-                {isSearching
-                  ? 'Searching...'
-                  : isLoading
-                    ? 'Thinking...'
-                    : imageLoading
-                      ? 'Creating...'
-                      : 'Online'}
-              </span>
-              <span className="status-badge online">Using: {activeProvider}</span>
-              {ragUsed && <span className="status-badge online">RAG</span>}
-              {ragUsed && <span className="status-badge online">Search: {searchProvider}</span>}
-              {researchUsed && <span className="status-badge online">Research</span>}
-              {activeChatId && messages.length > 0 && (
-                <button
-                  className="theme-toggle"
-                  onClick={exportChat}
-                  title="Export chat"
-                  style={{ fontSize: '0.82rem' }}
-                >
-                  Export
-                </button>
-              )}
-              <button className="theme-toggle" onClick={toggleTheme} title="Toggle theme">
-                {theme === 'dark' ? 'Light' : 'Dark'}
-              </button>
-            </div>
-          </header>
+          <ChatHeader
+            title={activeChat?.title || 'Arithmo AI'}
+            chatMode={chatMode}
+            onModeChange={handleModeChange}
+            provider={provider}
+            onProviderChange={setProvider}
+            responseMode={responseMode}
+            onResponseModeChange={setResponseMode}
+            isBusy={isBusy}
+            onOpenSidebar={() => setSidebarOpen(true)}
+            theme={theme}
+            onToggleTheme={toggleTheme}
+            onExport={exportChat}
+            canExport={Boolean(activeChatId && messages.length > 0)}
+            isSearching={isSearching}
+            isLoading={isLoading}
+            imageLoading={imageLoading}
+            activeProvider={activeProvider}
+            ragUsed={ragUsed}
+            researchUsed={researchUsed}
+            searchProvider={searchProvider}
+          />
 
           <div className="chat-body">
             {visibleMessages.length === 0 && (
-              <div className="empty-state">
-                <div className="empty-state-icon">AI</div>
-                <h2>What can I help you with?</h2>
-                <p>Ask me anything - math problems, code debugging, explanations, creative writing, and more.</p>
-                <div className="empty-suggestions">
-                  {[
-                    'Explain quantum computing simply',
-                    'Write a Python sorting algorithm',
-                    'Solve: integral of x^2 from 0 to 5',
-                    'Help me debug my React code',
-                  ].map((s) => (
-                    <button key={s} className="suggestion-chip" onClick={() => { setInput(s); textareaRef.current?.focus(); }}>
-                      {s}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <EmptyState
+                onPickSuggestion={(suggestion) => {
+                  setInput(suggestion);
+                  textareaRef.current?.focus();
+                }}
+              />
             )}
 
             {visibleMessages.map((msg) => (
@@ -1051,10 +753,18 @@ export default function HomePage() {
             ))}
 
             {isLoading && !streamingText && (
-              <div className="typing-indicator">
-                <div className="typing-dot" />
-                <div className="typing-dot" />
-                <div className="typing-dot" />
+              <>
+                <div className="skeleton-stack" aria-hidden="true">
+                  <div className="skeleton-bubble" />
+                  <div className="skeleton-bubble short" />
+                </div>
+                <TypingIndicator isSearching={isSearching} isGenerating={chatPhase === 'generating'} />
+              </>
+            )}
+
+            {!isLoading && isSearching && (
+              <div className="searching-row">
+                <TypingIndicator isSearching isGenerating={false} />
               </div>
             )}
 
@@ -1063,81 +773,29 @@ export default function HomePage() {
 
           {error && <div className="error-banner">Warning: {error}</div>}
 
-          <div className="input-area">
-            <div className="composer-actions">
-              <button
-                type="button"
-                className="practice-btn"
-                onClick={generatePracticeSet}
-                disabled={isLoading || imageLoading}
-                title="Generate 5 practice questions with answers"
-              >
-                Generate Practice
-              </button>
-            </div>
-            {selectedImage && (
-              <div className="image-chip">
-                <img src={selectedImage.dataUrl} alt={selectedImage.name || 'Attached image'} />
-                <div className="image-chip-meta">
-                  <strong>{selectedImage.name}</strong>
-                  <span>Attached for analysis</span>
-                </div>
-                <button className="image-remove-btn" onClick={removeSelectedImage} type="button">
-                  Remove
-                </button>
-              </div>
-            )}
-            <div className="input-row">
-              <textarea
-                ref={textareaRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={onKeyDown}
-                placeholder="Message Arithmo AI..."
-                rows={1}
-              />
-              <button
-                className="image-gen-btn"
-                onClick={onAttachClick}
-                disabled={isLoading || imageLoading}
-                title="Attach image to ask about it"
-                aria-label="Attach image"
-              >
-                📎
-              </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/png,image/jpeg,image/jpg,image/webp"
-                hidden
-                onChange={onImageChange}
-              />
-              <button
-                className="image-gen-btn"
-                onClick={generateImage}
-                disabled={!input.trim() || isLoading || imageLoading}
-                title="Generate image from prompt"
-                aria-label="Generate image"
-              >
-                {imageLoading ? '⏳' : '🖼️'}
-              </button>
-              {isLoading ? (
-                <button className="send-btn stop" onClick={stopGeneration}>Stop</button>
-              ) : (
-                <button
-                  className="send-btn"
-                  onClick={() => sendMessage()}
-                  disabled={!input.trim() && !selectedImage}
-                >
-                  Send
-                </button>
-              )}
-            </div>
-            <p className="input-disclaimer">
-              Arithmo AI may produce incorrect information.{' '}
-              <a href="/terms">Terms</a> | <a href="/privacy">Privacy</a> | astitvapandey1203@gmail.com
-            </p>
-          </div>
+          <ChatComposer
+            input={input}
+            onInputChange={setInput}
+            onKeyDown={onKeyDown}
+            onSend={isLoading ? stopGeneration : () => sendMessage()}
+            onAttachClick={onAttachClick}
+            onGenerateImage={generateImage}
+            onPractice={generatePracticeSet}
+            onSummary={createSummaryPrompt}
+            onRegenerate={regenerateResponse}
+            onDeepToggle={toggleDeepMode}
+            onMic={handleMicTap}
+            isListening={isListening}
+            micAvailable={canUseVoiceInput}
+            isLoading={isLoading}
+            imageLoading={imageLoading}
+            responseMode={responseMode}
+            selectedImage={selectedImage}
+            onRemoveSelectedImage={removeSelectedImage}
+            textareaRef={textareaRef}
+            fileInputRef={fileInputRef}
+            onImageChange={onImageChange}
+          />
         </main>
       </div>
     </>

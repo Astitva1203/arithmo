@@ -3,6 +3,7 @@ import {
   groqSupportsVision,
   requestGroqChatStream,
 } from '@/services/ai/groqService';
+import { isGeminiConfigured, requestGeminiChatStream } from '@/services/ai/geminiService';
 import { isNvidiaConfigured, requestNvidiaChatStream } from '@/services/ai/nvidiaService';
 
 const COMPLEX_QUERY_PATTERN =
@@ -22,12 +23,14 @@ function isComplexQuery(text) {
 
 function pickAutoProvider({ latestUserText, hasImageInput, chatMode }) {
   const groqAvailable = isGroqConfigured();
+  const geminiAvailable = isGeminiConfigured();
   const nvidiaAvailable = isNvidiaConfigured();
 
-  if (!groqAvailable && !nvidiaAvailable) return null;
+  if (!groqAvailable && !nvidiaAvailable && !geminiAvailable) return null;
 
   if (hasImageInput) {
     if (groqAvailable && groqSupportsVision()) return 'groq';
+    if (geminiAvailable) return 'gemini';
     if (nvidiaAvailable) return 'nvidia';
     return null;
   }
@@ -37,6 +40,7 @@ function pickAutoProvider({ latestUserText, hasImageInput, chatMode }) {
   if (chatMode === 'search' && nvidiaAvailable && complex) return 'nvidia';
   if (complex && nvidiaAvailable) return 'nvidia';
   if (groqAvailable) return 'groq';
+  if (geminiAvailable) return 'gemini';
   if (nvidiaAvailable) return 'nvidia';
   return null;
 }
@@ -44,6 +48,9 @@ function pickAutoProvider({ latestUserText, hasImageInput, chatMode }) {
 function resolveRequestedProvider(requestedProvider, context) {
   const requested = String(requestedProvider || 'auto').toLowerCase();
   if (requested === 'groq' && isGroqConfigured()) return { provider: 'groq', reason: 'user_selected' };
+  if (requested === 'gemini' && isGeminiConfigured()) {
+    return { provider: 'gemini', reason: 'user_selected' };
+  }
   if (requested === 'nvidia' && isNvidiaConfigured()) {
     if (context.hasImageInput && isGroqConfigured()) {
       return { provider: 'groq', reason: 'vision_routed_to_groq' };
@@ -58,10 +65,17 @@ function resolveRequestedProvider(requestedProvider, context) {
 function getFallbackProvider(provider, hasImageInput) {
   if (provider === 'groq') {
     if (isNvidiaConfigured() && !hasImageInput) return 'nvidia';
+    if (isGeminiConfigured()) return 'gemini';
+    return null;
+  }
+  if (provider === 'gemini') {
+    if (isGroqConfigured()) return 'groq';
+    if (isNvidiaConfigured() && !hasImageInput) return 'nvidia';
     return null;
   }
   if (provider === 'nvidia') {
     if (isGroqConfigured()) return 'groq';
+    if (isGeminiConfigured()) return 'gemini';
     return null;
   }
   return null;
@@ -85,6 +99,7 @@ function shouldRetryError(error) {
 
 async function callProvider(provider, args) {
   if (provider === 'groq') return requestGroqChatStream(args);
+  if (provider === 'gemini') return requestGeminiChatStream(args);
   if (provider === 'nvidia') return requestNvidiaChatStream(args);
   throw new Error('Unknown provider.');
 }
@@ -120,7 +135,7 @@ export async function routeChatRequest({
 
   const initialProvider = selection.provider;
   if (!initialProvider) {
-    throw new AiRouterError('No AI provider configured. Add GROQ_API_KEY or NVIDIA_API_KEY.', {
+    throw new AiRouterError('No AI provider configured. Add GROQ_API_KEY, GEMINI_API_KEY, or NVIDIA_API_KEY.', {
       status: 500,
       details: [{ provider: 'none', reason: 'missing_api_keys' }],
     });
