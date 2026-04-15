@@ -81,7 +81,9 @@ export default function ChatSidebar({
                 />
               ) : (
                 <>
-                  <span className="chat-item-title">{chat.title}</span>
+                  <span className="chat-item-title" title={chat.title}>
+                    {chat.title}
+                  </span>
                   <div className="chat-item-actions">
                     <button
                       className="chat-action-btn"

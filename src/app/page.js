@@ -36,6 +36,14 @@ function providerLabel(value) {
   return 'Auto';
 }
 
+function preferredProviderLabelFromModelMode(value) {
+  const normalized = String(value || '').toLowerCase();
+  if (normalized === 'fast') return 'Groq';
+  if (normalized === 'smart') return 'Gemini';
+  if (normalized === 'deep') return 'NVIDIA';
+  return 'Auto';
+}
+
 function searchProviderLabel(value) {
   const normalized = String(value || '').toLowerCase();
   if (normalized === 'serpapi') return 'SerpAPI';
@@ -60,11 +68,15 @@ export default function HomePage() {
   const [streamingText, setStreamingText] = useState('');
   const [error, setError] = useState('');
 
-  // Provider selection
-  const [provider, setProvider] = useState('auto');
+  // Model selection
+  const [modelMode, setModelMode] = useState('auto');
   const [responseMode, setResponseMode] = useState('deep');
   const [chatMode, setChatMode] = useState('chat');
+  const [modeSwitching, setModeSwitching] = useState(false);
   const [activeProvider, setActiveProvider] = useState('Auto');
+  const [fallbackNotice, setFallbackNotice] = useState('');
+  const [latencyMs, setLatencyMs] = useState(0);
+  const [queryComplexity, setQueryComplexity] = useState('');
   const [searchProvider, setSearchProvider] = useState('None');
   const [isSearching, setIsSearching] = useState(false);
   const [ragUsed, setRagUsed] = useState(false);
@@ -81,6 +93,7 @@ export default function HomePage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [renamingId, setRenamingId] = useState(null);
   const [renameValue, setRenameValue] = useState('');
+  const [deviceType, setDeviceType] = useState('desktop');
 
   const abortRef = useRef(null);
   const endRef = useRef(null);
@@ -105,8 +118,8 @@ export default function HomePage() {
   }, [router]);
 
   useEffect(() => {
-    setActiveProvider(providerLabel(provider));
-  }, [provider]);
+    setActiveProvider(preferredProviderLabelFromModelMode(modelMode));
+  }, [modelMode]);
 
   // ===== Load chats =====
   useEffect(() => {
@@ -217,6 +230,56 @@ export default function HomePage() {
     };
   }, []);
 
+  // ===== Device mode =====
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const mobileQuery = window.matchMedia('(max-width: 767px)');
+    const tabletQuery = window.matchMedia('(min-width: 768px) and (max-width: 1199px)');
+
+    const updateDeviceType = () => {
+      if (mobileQuery.matches) {
+        setDeviceType('mobile');
+        return;
+      }
+      if (tabletQuery.matches) {
+        setDeviceType('tablet');
+        return;
+      }
+      setDeviceType('desktop');
+    };
+
+    const subscribe = (query, callback) => {
+      if (typeof query.addEventListener === 'function') {
+        query.addEventListener('change', callback);
+        return () => query.removeEventListener('change', callback);
+      }
+      query.addListener(callback);
+      return () => query.removeListener(callback);
+    };
+
+    updateDeviceType();
+    const unsubscribeMobile = subscribe(mobileQuery, updateDeviceType);
+    const unsubscribeTablet = subscribe(tabletQuery, updateDeviceType);
+
+    return () => {
+      unsubscribeMobile();
+      unsubscribeTablet();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (deviceType !== 'mobile') {
+      setSidebarOpen(false);
+    }
+  }, [deviceType]);
+
+  useEffect(() => {
+    setModeSwitching(true);
+    const timeoutId = setTimeout(() => setModeSwitching(false), 240);
+    return () => clearTimeout(timeoutId);
+  }, [chatMode]);
+
   // ===== Visible messages =====
   const visibleMessages = useMemo(() => {
     if (!isLoading || !streamingText) return messages;
@@ -316,6 +379,9 @@ export default function HomePage() {
     setRagUsed(false);
     setResearchUsed(false);
     setSearchProvider('None');
+    setFallbackNotice('');
+    setLatencyMs(0);
+    setQueryComplexity('');
     setChatPhase(chatMode === 'search' || chatMode === 'research' ? 'searching' : 'generating');
     let chatId = activeChatId;
 
@@ -385,7 +451,7 @@ export default function HomePage() {
         body: JSON.stringify({
           messages: apiMessages,
           chatId,
-          provider,
+          modelMode,
           mode: responseMode,
           responseMode,
           chatMode,
@@ -402,10 +468,16 @@ export default function HomePage() {
       if (!res.body) throw new Error('No response stream.');
 
       const usedProvider = providerLabel(res.headers.get('x-ai-provider'));
+      const fallbackUsed = res.headers.get('x-ai-fallback-used') === '1';
+      const complexity = String(res.headers.get('x-ai-query-complexity') || '').trim();
+      const elapsed = Number(res.headers.get('x-ai-latency-ms') || 0);
       const usedSearchProvider = searchProviderLabel(res.headers.get('x-search-provider'));
       const didUseRag = res.headers.get('x-rag-used') === '1';
       const didUseResearch = res.headers.get('x-research-used') === '1';
       setActiveProvider(usedProvider);
+      setFallbackNotice(fallbackUsed ? `Switched to ${usedProvider} (fallback)` : '');
+      setQueryComplexity(complexity ? `${complexity[0].toUpperCase()}${complexity.slice(1)}` : '');
+      setLatencyMs(Number.isFinite(elapsed) && elapsed > 0 ? Math.round(elapsed) : 0);
       setRagUsed(didUseRag);
       setResearchUsed(didUseResearch);
       setSearchProvider(usedSearchProvider);
@@ -452,6 +524,7 @@ export default function HomePage() {
       if (err?.name === 'AbortError') return;
       const msg = err?.message || 'Something went wrong.';
       setError(msg);
+      setFallbackNotice('');
       setChatPhase('error');
     } finally {
       setIsLoading(false);
@@ -459,7 +532,7 @@ export default function HomePage() {
       setStreamingText('');
       abortRef.current = null;
     }
-  }, [input, isLoading, chats, messages, activeChatId, provider, responseMode, chatMode, selectedImage, isListening]);
+  }, [input, isLoading, chats, messages, activeChatId, modelMode, responseMode, chatMode, selectedImage, isListening]);
 
   // ===== Generate Image =====
   const generateImage = useCallback(async () => {
@@ -687,7 +760,7 @@ export default function HomePage() {
   return (
     <>
       <div className="bg-glow" />
-      <div className="app-layout">
+      <div className={`app-layout device-${deviceType}`} data-device={deviceType}>
         <ChatSidebar
           user={user}
           chats={chats}
@@ -715,12 +788,11 @@ export default function HomePage() {
             title={activeChat?.title || 'Arithmo AI'}
             chatMode={chatMode}
             onModeChange={handleModeChange}
-            provider={provider}
-            onProviderChange={setProvider}
-            responseMode={responseMode}
-            onResponseModeChange={setResponseMode}
+            modelMode={modelMode}
+            onModelModeChange={setModelMode}
             isBusy={isBusy}
             onOpenSidebar={() => setSidebarOpen(true)}
+            deviceType={deviceType}
             theme={theme}
             onToggleTheme={toggleTheme}
             onExport={exportChat}
@@ -729,12 +801,15 @@ export default function HomePage() {
             isLoading={isLoading}
             imageLoading={imageLoading}
             activeProvider={activeProvider}
+            fallbackNotice={fallbackNotice}
+            latencyMs={latencyMs}
+            queryComplexity={queryComplexity}
             ragUsed={ragUsed}
             researchUsed={researchUsed}
             searchProvider={searchProvider}
           />
 
-          <div className="chat-body">
+          <div className={`chat-body ${modeSwitching ? 'mode-switching' : ''}`}>
             {visibleMessages.length === 0 && (
               <EmptyState
                 onPickSuggestion={(suggestion) => {
@@ -790,6 +865,7 @@ export default function HomePage() {
             isLoading={isLoading}
             imageLoading={imageLoading}
             responseMode={responseMode}
+            deviceType={deviceType}
             selectedImage={selectedImage}
             onRemoveSelectedImage={removeSelectedImage}
             textareaRef={textareaRef}

@@ -72,6 +72,10 @@ npm run build
 npm run start
 ```
 
+## Redeploy
+
+For GitHub + Vercel redeploy steps, see `DEPLOYMENT.md`.
+
 ## Routing Logic
 
 - Provider `auto`:

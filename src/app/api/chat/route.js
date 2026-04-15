@@ -387,6 +387,14 @@ function normalizeProvider(value) {
   return 'auto';
 }
 
+function normalizeModelMode(value) {
+  const mode = String(value || 'auto').trim().toLowerCase();
+  if (mode === 'auto' || mode === 'fast' || mode === 'smart' || mode === 'deep') {
+    return mode;
+  }
+  return 'auto';
+}
+
 function normalizeGeneratedTitle(rawTitle, fallback) {
   const cleaned = String(rawTitle || '')
     .replace(/["'“”‘’]/g, '')
@@ -717,6 +725,7 @@ export async function POST(request) {
     const hasImageInput = imageCount > 0;
     const chatId = body?.chatId || null;
     const requestedProvider = normalizeProvider(body?.provider);
+    const modelMode = normalizeModelMode(body?.modelMode);
     const chatMode = normalizeChatMode(body?.chatMode);
     const action = normalizeAction(body?.action);
 
@@ -774,11 +783,13 @@ export async function POST(request) {
     try {
       routeResult = await routeChatRequest({
         requestedProvider,
+        modelMode,
         messages: effectiveMessages,
         systemPrompt,
         latestUserText,
         hasImageInput,
         chatMode,
+        responseMode,
         timeoutMs: 75_000,
       });
     } catch (error) {
@@ -799,6 +810,12 @@ export async function POST(request) {
 
     const upstream = routeResult.response;
     const providerUsed = routeResult.providerUsed;
+    const fallbackUsed = Boolean(routeResult.fallbackUsed);
+    const fallbackFrom = routeResult.fallbackFrom || '';
+    const queryComplexity = routeResult.queryComplexity || 'medium';
+    const routeReason = routeResult.routeReason || 'auto_router';
+    const modelModeUsed = routeResult.modelMode || modelMode || 'auto';
+    const elapsedMs = Number(routeResult.elapsedMs || 0);
 
     const lastUserMessage = [...effectiveMessages].reverse().find((m) => m.role === 'user');
     const userContent = getMessageText(lastUserMessage?.content) || 'Please analyze this image.';
@@ -945,6 +962,11 @@ export async function POST(request) {
                   role: 'assistant',
                   content: fullResponse,
                   provider: providerUsed,
+                  modelMode: modelModeUsed,
+                  routeReason,
+                  queryComplexity,
+                  fallbackUsed,
+                  fallbackFrom,
                   mode: chatMode,
                   action,
                   ragUsed: Boolean(searchResult.used),
@@ -1035,6 +1057,12 @@ export async function POST(request) {
         'Content-Type': 'text/plain; charset=utf-8',
         'Cache-Control': 'no-cache, no-transform',
         'x-ai-provider': providerUsed,
+        'x-ai-model-mode': modelModeUsed,
+        'x-ai-route-reason': routeReason,
+        'x-ai-query-complexity': queryComplexity,
+        'x-ai-fallback-used': fallbackUsed ? '1' : '0',
+        'x-ai-fallback-from': fallbackFrom,
+        'x-ai-latency-ms': String(elapsedMs),
         'x-rag-used': searchResult.used ? '1' : '0',
         'x-search-provider': searchResult.provider || 'none',
         'x-research-used': chatMode === 'research' && searchResult.used ? '1' : '0',
