@@ -171,7 +171,8 @@ html, body {
   height: 36px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-glass-strong);
-  object-fit: cover;
+  object-fit: contain;
+  background: var(--bg-glass-input);
 }
 
 .sidebar-brand h2 {
@@ -873,12 +874,13 @@ html, body {
 }
 
 .auth-logo {
-  width: 64px;
-  height: 64px;
-  border-radius: var(--radius-md);
+  width: min(228px, 84%);
+  height: auto;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border-glass-strong);
-  margin-bottom: 12px;
-  object-fit: cover;
+  margin-bottom: 14px;
+  object-fit: contain;
+  background: color-mix(in srgb, var(--bg-glass-input), transparent 8%);
 }
 
 .auth-brand h1 {
@@ -1564,11 +1566,21 @@ body {
 }
 
 .header-brand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 0.76rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--text-muted);
   line-height: 1;
+}
+
+.header-brand-logo {
+  width: 17px;
+  height: 17px;
+  border-radius: 5px;
+  border: 1px solid var(--border-glass-strong);
 }
 
 .chat-title {

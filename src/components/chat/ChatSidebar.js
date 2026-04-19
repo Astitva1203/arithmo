@@ -39,7 +39,7 @@ export default function ChatSidebar({
       <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-header">
           <div className="sidebar-brand">
-            <img src="/logo.png" alt="Arithmo" />
+            <img src="/logo.png" alt="Arithmo AI logo" />
             <div>
               <h2>Arithmo AI</h2>
               <p>Conversations</p>

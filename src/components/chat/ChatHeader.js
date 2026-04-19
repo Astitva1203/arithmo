@@ -61,7 +61,10 @@ export default function ChatHeader({
             <Menu size={18} strokeWidth={2.2} />
           </button>
           <div className="header-title-wrap">
-            <div className="header-brand">Arithmo AI</div>
+            <div className="header-brand">
+              <img src="/logo.png" alt="" aria-hidden="true" className="header-brand-logo" />
+              <span>Arithmo AI</span>
+            </div>
             <span className="chat-title">{title || 'New conversation'}</span>
           </div>
         </div>
