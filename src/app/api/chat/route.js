@@ -352,9 +352,17 @@ ${searchBlock}
 ${freshnessBlock}`;
 }
 
+function normalizeConfidenceMarkup(text) {
+  return String(text || '')
+    .replace(/[*_`]/g, '')
+    .replace(/\r/g, '');
+}
+
 function hasConfidenceMeter(text) {
-  const content = String(text || '');
-  return /\bConfidence\s*:\s*(High|Medium|Low)\b/i.test(content) && /\bReason\s*:/i.test(content);
+  const content = normalizeConfidenceMarkup(text);
+  const confidencePattern = /(^|\n)\s*(?:[-*]\s*)?confidence\s*:\s*(high|medium|low)\b/i;
+  const reasonPattern = /(^|\n)\s*(?:[-*]\s*)?reason\s*:\s*\S+/i;
+  return confidencePattern.test(content) && reasonPattern.test(content);
 }
 
 function buildFallbackConfidence(responseMode) {
@@ -381,7 +389,12 @@ function parseStreamToken(payload) {
 
 function normalizeProvider(value) {
   const provider = String(value || 'auto').trim().toLowerCase();
-  if (provider === 'groq' || provider === 'gemini' || provider === 'nvidia' || provider === 'auto') {
+  if (
+    provider === 'groq' ||
+    provider === 'gemini' ||
+    provider === 'nvidia' ||
+    provider === 'auto'
+  ) {
     return provider;
   }
   return 'auto';

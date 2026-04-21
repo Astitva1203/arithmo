@@ -14,7 +14,6 @@ const SIMPLE_QUERY_PATTERN =
 
 const MODEL_MODE_VALUES = new Set(['auto', 'fast', 'smart', 'deep']);
 const LEGACY_PROVIDER_VALUES = new Set(['auto', 'groq', 'gemini', 'nvidia']);
-const FALLBACK_PRIORITY = ['gemini', 'groq', 'nvidia'];
 
 function normalizeProvider(value) {
   const provider = String(value || 'auto').trim().toLowerCase();
@@ -84,7 +83,9 @@ function isProviderAvailable(provider, { hasImageInput = false } = {}) {
 }
 
 function getAvailableProviders(context) {
-  return ['groq', 'gemini', 'nvidia'].filter((provider) => isProviderAvailable(provider, context));
+  return ['groq', 'gemini', 'nvidia'].filter((provider) =>
+    isProviderAvailable(provider, context)
+  );
 }
 
 function chooseAutoProvider({
@@ -177,20 +178,11 @@ function resolveModelSelection({
         availableProviders,
       };
     }
-
-    const fallbackForMode = chooseAutoProvider({
-      complexity,
-      chatMode,
-      responseMode,
-      hasImageInput,
-      availableProviders,
-    });
-
     return {
-      provider: fallbackForMode,
+      provider: null,
       modelModeUsed: inferredMode,
       complexity,
-      routeReason: 'mode_unavailable_auto_fallback',
+      routeReason: 'mode_unavailable',
       availableProviders,
     };
   }
@@ -210,27 +202,6 @@ function resolveModelSelection({
     routeReason: 'auto_router',
     availableProviders,
   };
-}
-
-function buildProviderOrder(primaryProvider, availableProviders) {
-  const normalizedAvailable = FALLBACK_PRIORITY.filter((provider) => availableProviders.includes(provider));
-  if (!primaryProvider) return normalizedAvailable;
-  return [primaryProvider, ...normalizedAvailable.filter((provider) => provider !== primaryProvider)];
-}
-
-function shouldRetryStatus(status) {
-  return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
-}
-
-function shouldRetryError(error) {
-  const text = String(error?.message || '').toLowerCase();
-  return (
-    text.includes('timeout') ||
-    text.includes('timed out') ||
-    text.includes('network') ||
-    text.includes('socket') ||
-    text.includes('fetch failed')
-  );
 }
 
 function detectFailureType({ status = 0, errorText = '' }) {
@@ -314,6 +285,20 @@ export async function routeChatRequest({
 
   const initialProvider = selection.provider;
   if (!initialProvider) {
+    if (selection.routeReason === 'mode_unavailable' && selection.modelModeUsed !== 'auto') {
+      throw new AiRouterError(
+        `Selected model mode "${selection.modelModeUsed}" is not configured. Add the required API key or switch model mode.`,
+        {
+          status: 400,
+          details: [{ provider: 'none', reason: 'mode_unavailable' }],
+          metadata: {
+            modelMode: selection.modelModeUsed,
+            complexity: selection.complexity,
+          },
+        }
+      );
+    }
+
     throw new AiRouterError('No AI provider configured. Add GROQ_API_KEY, GEMINI_API_KEY, or NVIDIA_API_KEY.', {
       status: 500,
       details: [{ provider: 'none', reason: 'missing_api_keys' }],
@@ -324,78 +309,75 @@ export async function routeChatRequest({
     });
   }
 
-  const providerOrder = buildProviderOrder(initialProvider, selection.availableProviders);
-  const attempts = [];
+  const callStart = Date.now();
+  try {
+    const response = await callProvider(initialProvider, {
+      messages,
+      systemPrompt,
+      hasImageInput,
+      timeoutMs,
+    });
 
-  for (const provider of providerOrder) {
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
-      const callStart = Date.now();
-      try {
-        const response = await callProvider(provider, {
-          messages,
-          systemPrompt,
-          hasImageInput,
-          timeoutMs,
-        });
+    if (response.ok && response.body) {
+      return {
+        providerUsed: initialProvider,
+        primaryProvider: initialProvider,
+        fallbackUsed: false,
+        fallbackFrom: null,
+        routeReason: selection.routeReason,
+        attempts: [],
+        response,
+        queryComplexity: selection.complexity,
+        modelMode: selection.modelModeUsed,
+        elapsedMs: Date.now() - routeStart,
+        providerElapsedMs: Date.now() - callStart,
+      };
+    }
 
-        if (response.ok && response.body) {
-          return {
-            providerUsed: provider,
-            primaryProvider: initialProvider,
-            fallbackUsed: provider !== initialProvider,
-            fallbackFrom: provider !== initialProvider ? initialProvider : null,
-            routeReason: selection.routeReason,
-            attempts,
-            response,
-            queryComplexity: selection.complexity,
-            modelMode: selection.modelModeUsed,
-            elapsedMs: Date.now() - routeStart,
-            providerElapsedMs: Date.now() - callStart,
-          };
-        }
-
-        const providerError = await readResponseError(response);
-        attempts.push({
-          provider,
-          attempt,
+    const providerError = await readResponseError(response);
+    throw new AiRouterError(`Selected AI provider failed: ${providerError}`, {
+      status: response.status && Number(response.status) > 0 ? Number(response.status) : 502,
+      details: [
+        {
+          provider: initialProvider,
+          attempt: 1,
           status: response.status,
           failureType: detectFailureType({ status: response.status, errorText: providerError }),
           error: providerError,
           elapsedMs: Date.now() - callStart,
-        });
+        },
+      ],
+      metadata: {
+        modelMode: selection.modelModeUsed,
+        complexity: selection.complexity,
+        initialProvider,
+        elapsedMs: Date.now() - routeStart,
+      },
+    });
+  } catch (error) {
+    if (error instanceof AiRouterError) {
+      throw error;
+    }
 
-        if (attempt < 2 && shouldRetryStatus(response.status)) {
-          continue;
-        }
-        break;
-      } catch (error) {
-        const message = error?.message || 'Unknown request failure.';
-        attempts.push({
-          provider,
-          attempt,
+    const message = error?.message || 'Unknown request failure.';
+    throw new AiRouterError(`Selected AI provider failed: ${message}`, {
+      status: 502,
+      details: [
+        {
+          provider: initialProvider,
+          attempt: 1,
           status: 0,
           failureType: detectFailureType({ status: 0, errorText: message }),
           error: message,
           elapsedMs: Date.now() - callStart,
-        });
-
-        if (attempt < 2 && shouldRetryError(error)) {
-          continue;
-        }
-        break;
-      }
-    }
+        },
+      ],
+      metadata: {
+        modelMode: selection.modelModeUsed,
+        complexity: selection.complexity,
+        initialProvider,
+        elapsedMs: Date.now() - routeStart,
+      },
+    });
   }
-
-  const last = attempts[attempts.length - 1];
-  throw new AiRouterError(`AI providers failed. Last error: ${last?.error || 'Unknown failure.'}`, {
-    status: last?.status && Number(last.status) > 0 ? Number(last.status) : 502,
-    details: attempts,
-    metadata: {
-      modelMode: selection.modelModeUsed,
-      complexity: selection.complexity,
-      initialProvider,
-      elapsedMs: Date.now() - routeStart,
-    },
-  });
 }

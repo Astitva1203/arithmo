@@ -38,6 +38,7 @@ export default function PrivacyPage() {
         <p>Arithmo AI uses the following third-party APIs to process your requests:</p>
         <ul>
           <li><strong>Groq API:</strong> For processing AI chat interactions. Your messages are sent to Groq&apos;s servers for inference. Please review <a href="https://groq.com/privacy-policy/" target="_blank" rel="noopener noreferrer">Groq&apos;s Privacy Policy</a>.</li>
+          <li><strong>Google Gemini API:</strong> For balanced tutoring responses and multimodal reasoning when selected or routed automatically.</li>
           <li><strong>NVIDIA API:</strong> For advanced reasoning responses when selected or routed automatically.</li>
         </ul>
 

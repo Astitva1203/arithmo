@@ -81,7 +81,7 @@ For GitHub + Vercel redeploy steps, see `DEPLOYMENT.md`.
 - Provider `auto`:
   - Simpler prompts prefer Groq (speed)
   - Complex prompts prefer NVIDIA (depth)
-- If selected provider fails, Arithmo retries once then switches provider (Groq/Gemini/NVIDIA).
+- If selected provider fails, Arithmo returns the provider error directly (no cross-provider fallback switching).
 - Search Mode:
   - Performs web search when mode is `search` or query looks real-time (`latest`, `news`, `today`, etc.)
   - Injects top web findings into system context

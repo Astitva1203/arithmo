@@ -155,8 +155,8 @@ export default function HomePage() {
 
   // ===== Auto scroll =====
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, streamingText]);
+    endRef.current?.scrollIntoView({ behavior: isLoading ? 'auto' : 'smooth', block: 'end' });
+  }, [messages, streamingText, isLoading]);
 
   // ===== Focus input =====
   useEffect(() => {
