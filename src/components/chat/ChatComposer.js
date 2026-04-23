@@ -153,7 +153,7 @@ export default function ChatComposer({
         </div>
       )}
 
-      <div className="input-row liquid-input-row">
+      <div className="input-row liquid-input-row" style={{ position: 'relative' }}>
         <textarea
           ref={textareaRef}
           value={input}
@@ -161,7 +161,13 @@ export default function ChatComposer({
           onKeyDown={onKeyDown}
           placeholder={isMobile ? 'Type your message...' : 'Message Arithmo AI...'}
           rows={1}
+          maxLength={4000}
         />
+        
+        <div style={{ position: 'absolute', right: '140px', bottom: '16px', fontSize: '0.65rem', color: 'var(--text-muted)', pointerEvents: 'none', display: 'flex', gap: '8px' }}>
+          {!isMobile && <span><kbd style={{ padding: '2px 4px', background: 'var(--bg-glass)', borderRadius: '4px', border: '1px solid var(--border-glass-strong)' }}>Shift</kbd> + <kbd style={{ padding: '2px 4px', background: 'var(--bg-glass)', borderRadius: '4px', border: '1px solid var(--border-glass-strong)' }}>Enter</kbd> to add a new line</span>}
+          <span>{input.length}/4000</span>
+        </div>
 
         <input
           ref={fileInputRef}
@@ -225,9 +231,11 @@ export default function ChatComposer({
         )}
       </div>
 
-      <p className="input-disclaimer">
-        Arithmo AI may produce incorrect information. <a href="/terms">Terms</a> | <a href="/privacy">Privacy</a>
-      </p>
+      <div style={{ display: 'flex', justifyContent: 'center', marginTop: '8px' }}>
+        <p className="input-disclaimer" style={{ margin: 0 }}>
+          Arithmo AI may produce incorrect information. <a href="/terms">Terms</a> | <a href="/privacy">Privacy</a>
+        </p>
+      </div>
     </div>
   );
 }

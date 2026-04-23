@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -823,6 +823,7 @@ export default function HomePage() {
               <MessageBubble
                 key={msg.id}
                 message={msg}
+                user={user}
                 onFollowUpClick={applyFollowUpQuestion}
               />
             ))}

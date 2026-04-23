@@ -63,7 +63,15 @@ export default function ChatHeader({
           <div className="header-title-wrap">
             <div className="header-brand">
               <img src="/logo.png" alt="" aria-hidden="true" className="header-brand-logo" />
-              <span>Arithmo AI</span>
+              <span style={{ 
+                background: 'var(--gradient-accent)', 
+                WebkitBackgroundClip: 'text', 
+                WebkitTextFillColor: 'transparent',
+                fontWeight: 800,
+                letterSpacing: '-0.02em',
+                fontSize: '1.05rem',
+                animation: 'pulse-badge 4s ease-in-out infinite'
+              }}>Arithmo AI</span>
             </div>
             <span className="chat-title">{title || 'New conversation'}</span>
           </div>

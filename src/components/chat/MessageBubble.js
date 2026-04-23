@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import CodeBlock from '@/components/chat/CodeBlock';
+import { Copy, Share2, Sparkles, Check } from 'lucide-react';
 import {
   extractConfidence,
   extractDomainFromUrl,
@@ -116,9 +117,10 @@ function ResearchBlocks({ summary, keyPoints, perspectives, conclusion }) {
   );
 }
 
-export default function MessageBubble({ message, onFollowUpClick }) {
+export default function MessageBubble({ message, user, onFollowUpClick }) {
   const isUser = message.role === 'user';
   const [copied, setCopied] = useState(false);
+  const [shared, setShared] = useState(false);
   const imageSrc = message.imageDataUrl || message.imageUrl || '';
   const mode = inferMessageMode(message);
 
@@ -160,12 +162,30 @@ export default function MessageBubble({ message, onFollowUpClick }) {
   function handleCopy() {
     navigator.clipboard.writeText(message.content).then(() => {
       setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      setTimeout(() => setCopied(false), 2000);
     });
+  }
+
+  function handleShare() {
+    if (navigator.share) {
+      navigator.share({
+        title: 'Arithmo AI Chat',
+        text: message.content,
+      }).catch(() => {});
+    } else {
+      handleCopy();
+      setShared(true);
+      setTimeout(() => setShared(false), 2000);
+    }
   }
 
   return (
     <div className={`msg-row ${isUser ? 'user' : 'assistant'} message-enter`}> 
+      {!isUser && (
+        <div className="msg-avatar ai-avatar" style={{ marginRight: '10px', marginTop: '12px', width: '32px', height: '32px', borderRadius: '50%', background: 'var(--gradient-accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', flexShrink: 0 }}>
+          <Sparkles size={16} />
+        </div>
+      )}
       <div className={`msg-bubble ${isUser ? 'user' : 'assistant'}`}>
         {imageSrc && (
           <div className="msg-image-wrap">
@@ -230,12 +250,22 @@ export default function MessageBubble({ message, onFollowUpClick }) {
         <div className="msg-meta">
           <span className="msg-time">{formatTime(message.timestamp)}</span>
           {!isUser && (
-            <button className={`copy-btn ${copied ? 'copied' : ''}`} onClick={handleCopy} type="button">
-              {copied ? 'Copied' : 'Copy'}
-            </button>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <button className="copy-btn" onClick={handleShare} type="button" title="Share">
+                {shared ? <Check size={14} style={{ color: 'var(--success)' }} /> : <Share2 size={14} />}
+              </button>
+              <button className={`copy-btn ${copied ? 'copied' : ''}`} onClick={handleCopy} type="button" title="Copy">
+                {copied ? <Check size={14} /> : <Copy size={14} />}
+              </button>
+            </div>
           )}
         </div>
       </div>
+      {isUser && (
+        <div className="msg-avatar user-avatar" style={{ marginLeft: '10px', marginTop: '12px', width: '32px', height: '32px', borderRadius: '50%', background: 'var(--bg-glass-input)', border: '1px solid var(--border-glass-strong)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-primary)', fontSize: '0.85rem', flexShrink: 0 }}>
+          {(user?.name || user?.email || 'U')[0]?.toUpperCase()}
+        </div>
+      )}
     </div>
   );
 }
