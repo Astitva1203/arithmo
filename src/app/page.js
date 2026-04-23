@@ -9,6 +9,7 @@ import ChatSidebar from '@/components/chat/ChatSidebar';
 import EmptyState from '@/components/chat/EmptyState';
 import MessageBubble from '@/components/chat/MessageBubble';
 import TypingIndicator from '@/components/chat/TypingIndicator';
+import SettingsModal from '@/components/chat/SettingsModal';
 import { triggerHaptic } from '@/lib/haptics';
 
 function createId() {
@@ -94,6 +95,7 @@ export default function HomePage() {
   const [renamingId, setRenamingId] = useState(null);
   const [renameValue, setRenameValue] = useState('');
   const [deviceType, setDeviceType] = useState('desktop');
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const abortRef = useRef(null);
   const endRef = useRef(null);
@@ -779,9 +781,18 @@ export default function HomePage() {
           onDeleteChat={deleteChat}
           onCreateNewChat={createNewChat}
           onLogout={handleLogout}
+          onOpenSettings={() => setSettingsOpen(true)}
           sidebarOpen={sidebarOpen}
           onCloseSidebar={() => setSidebarOpen(false)}
         />
+        
+        {settingsOpen && (
+          <SettingsModal 
+            user={user} 
+            onClose={() => setSettingsOpen(false)} 
+            onUpdateUser={(updatedUser) => setUser(updatedUser)} 
+          />
+        )}
 
         <main className="main-area">
           <ChatHeader

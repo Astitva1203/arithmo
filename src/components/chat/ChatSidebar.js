@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { MessageSquare, Plus, Edit2, Trash2, Check, X, Search, LogOut } from 'lucide-react';
+import { MessageSquare, Plus, Edit2, Trash2, Check, X, Search, LogOut, Settings } from 'lucide-react';
 
 const PAGE_SIZE = 18;
 
@@ -19,6 +19,7 @@ export default function ChatSidebar({
   onDeleteChat,
   onCreateNewChat,
   onLogout,
+  onOpenSettings,
   sidebarOpen,
   onCloseSidebar,
 }) {
@@ -164,15 +165,22 @@ export default function ChatSidebar({
 
         <div className="sidebar-footer">
           <div className="sidebar-user">
-            <div className="user-avatar">{(user?.name || user?.email || '?')[0]?.toUpperCase()}</div>
+            <div className="user-avatar" style={{ overflow: 'hidden' }}>
+              {user?.avatar ? <img src={user.avatar} alt="User" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : (user?.name || user?.email || '?')[0]?.toUpperCase()}
+            </div>
             <div className="user-info">
               <div className="user-name">{user?.name || 'Arithmo User'}</div>
               <div className="user-email">{user?.email || 'user@arithmo.ai'}</div>
             </div>
           </div>
-          <button className="logout-btn" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }} type="button" onClick={onLogout}>
-            <LogOut size={14} /> Sign Out
-          </button>
+          <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+            <button className="logout-btn" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }} type="button" onClick={onOpenSettings}>
+              <Settings size={14} /> Profile
+            </button>
+            <button className="logout-btn" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }} type="button" onClick={onLogout}>
+              <LogOut size={14} /> Sign Out
+            </button>
+          </div>
         </div>
       </aside>
     </>

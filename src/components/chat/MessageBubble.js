@@ -182,8 +182,8 @@ export default function MessageBubble({ message, user, onFollowUpClick }) {
   return (
     <div className={`msg-row ${isUser ? 'user' : 'assistant'} message-enter`}> 
       {!isUser && (
-        <div className="msg-avatar ai-avatar" style={{ marginRight: '10px', marginTop: '12px', width: '32px', height: '32px', borderRadius: '50%', background: 'var(--gradient-accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', flexShrink: 0 }}>
-          <Sparkles size={16} />
+        <div className="msg-avatar ai-avatar" style={{ marginRight: '10px', marginTop: '12px', width: '30px', height: '30px', borderRadius: '50%', background: 'var(--gradient-accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', flexShrink: 0, overflow: 'hidden' }}>
+          <img src="/logo.png" alt="Arithmo AI" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
         </div>
       )}
       <div className={`msg-bubble ${isUser ? 'user' : 'assistant'}`}>
@@ -262,8 +262,12 @@ export default function MessageBubble({ message, user, onFollowUpClick }) {
         </div>
       </div>
       {isUser && (
-        <div className="msg-avatar user-avatar" style={{ marginLeft: '10px', marginTop: '12px', width: '32px', height: '32px', borderRadius: '50%', background: 'var(--bg-glass-input)', border: '1px solid var(--border-glass-strong)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-primary)', fontSize: '0.85rem', flexShrink: 0 }}>
-          {(user?.name || user?.email || 'U')[0]?.toUpperCase()}
+        <div className="msg-avatar user-avatar" style={{ marginLeft: '10px', marginTop: '12px', width: '30px', height: '30px', borderRadius: '50%', background: 'var(--bg-glass-input)', border: '1px solid var(--border-glass-strong)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-primary)', fontSize: '0.85rem', flexShrink: 0, overflow: 'hidden' }}>
+          {user?.avatar ? (
+            <img src={user.avatar} alt="User" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+          ) : (
+            (user?.name || user?.email || 'U')[0]?.toUpperCase()
+          )}
         </div>
       )}
     </div>

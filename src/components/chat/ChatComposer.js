@@ -163,11 +163,6 @@ export default function ChatComposer({
           rows={1}
           maxLength={4000}
         />
-        
-        <div style={{ position: 'absolute', right: '140px', bottom: '16px', fontSize: '0.65rem', color: 'var(--text-muted)', pointerEvents: 'none', display: 'flex', gap: '8px' }}>
-          {!isMobile && <span><kbd style={{ padding: '2px 4px', background: 'var(--bg-glass)', borderRadius: '4px', border: '1px solid var(--border-glass-strong)' }}>Shift</kbd> + <kbd style={{ padding: '2px 4px', background: 'var(--bg-glass)', borderRadius: '4px', border: '1px solid var(--border-glass-strong)' }}>Enter</kbd> to add a new line</span>}
-          <span>{input.length}/4000</span>
-        </div>
 
         <input
           ref={fileInputRef}

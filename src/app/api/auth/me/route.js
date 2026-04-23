@@ -53,6 +53,7 @@ export async function GET(request) {
         id: user._id.toString(),
         email: user.email,
         name: user.name || user.email.split('@')[0],
+        avatar: user.avatar || null,
       },
     });
   } catch (error) {
