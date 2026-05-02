@@ -2,7 +2,7 @@
 
 import { useEffect } from 'react';
 
-const FLAG_KEY = 'arithmo_sw_cleanup_done_v1';
+const FLAG_KEY = 'arithmo_sw_cleanup_done_v2';
 
 export default function ServiceWorkerCleanup() {
   useEffect(() => {

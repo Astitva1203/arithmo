@@ -51,9 +51,13 @@ export function getAuthUser(request) {
 
 export function createAuthCookie(token) {
   const maxAge = 7 * 24 * 60 * 60; // 7 days
-  return `${COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`;
+  const isProduction = process.env.NODE_ENV === 'production' || process.env.VERCEL === '1';
+  const secure = isProduction ? '; Secure' : '';
+  return `${COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax${secure}; Max-Age=${maxAge}`;
 }
 
 export function clearAuthCookie() {
-  return `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+  const isProduction = process.env.NODE_ENV === 'production' || process.env.VERCEL === '1';
+  const secure = isProduction ? '; Secure' : '';
+  return `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax${secure}; Max-Age=0`;
 }
