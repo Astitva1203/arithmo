@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import CodeBlock from '@/components/chat/CodeBlock';
-import { Copy, Share2, Sparkles, Check } from 'lucide-react';
+import { Copy, Share2, Sparkles, Check, Pin, PinOff } from 'lucide-react';
 import {
   extractConfidence,
   extractDomainFromUrl,
@@ -117,12 +117,13 @@ function ResearchBlocks({ summary, keyPoints, perspectives, conclusion }) {
   );
 }
 
-export default function MessageBubble({ message, user, onFollowUpClick }) {
+export default function MessageBubble({ message, user, onFollowUpClick, isPinned, onTogglePin }) {
   const isUser = message.role === 'user';
   const [copied, setCopied] = useState(false);
   const [shared, setShared] = useState(false);
   const imageSrc = message.imageDataUrl || message.imageUrl || '';
   const mode = inferMessageMode(message);
+  const pinned = Boolean(isPinned);
 
   const sourceItems = useMemo(() => {
     if (Array.isArray(message.sources) && message.sources.length > 0) {
@@ -186,7 +187,7 @@ export default function MessageBubble({ message, user, onFollowUpClick }) {
           <img src="/logo.png" alt="Arithmo AI" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
         </div>
       )}
-      <div className={`msg-bubble ${isUser ? 'user' : 'assistant'}`}>
+      <div className={`msg-bubble ${isUser ? 'user' : 'assistant'}${pinned ? ' pinned' : ''}`}>
         {imageSrc && (
           <div className="msg-image-wrap">
             <img src={imageSrc} alt={isUser ? 'Attached image' : 'Generated image'} loading="lazy" />
@@ -251,6 +252,14 @@ export default function MessageBubble({ message, user, onFollowUpClick }) {
           <span className="msg-time">{formatTime(message.timestamp)}</span>
           {!isUser && (
             <div style={{ display: 'flex', gap: '6px' }}>
+              <button
+                className={`copy-btn ${pinned ? 'pinned' : ''}`}
+                onClick={() => onTogglePin?.()}
+                type="button"
+                title={pinned ? 'Unpin message' : 'Pin message'}
+              >
+                {pinned ? <PinOff size={14} /> : <Pin size={14} />}
+              </button>
               <button className="copy-btn" onClick={handleShare} type="button" title="Share">
                 {shared ? <Check size={14} style={{ color: 'var(--success)' }} /> : <Share2 size={14} />}
               </button>

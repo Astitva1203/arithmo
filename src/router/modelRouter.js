@@ -14,6 +14,7 @@ const SIMPLE_QUERY_PATTERN =
 
 const MODEL_MODE_VALUES = new Set(['auto', 'fast', 'smart', 'deep']);
 const LEGACY_PROVIDER_VALUES = new Set(['auto', 'groq', 'gemini', 'nvidia']);
+const FALLBACK_PROVIDER_ORDER = ['gemini', 'groq', 'nvidia'];
 
 function normalizeProvider(value) {
   const provider = String(value || 'auto').trim().toLowerCase();
@@ -227,6 +228,71 @@ async function readResponseError(response) {
   return raw ? raw.slice(0, 800) : `HTTP ${response.status}`;
 }
 
+function buildProviderOrder(initialProvider, availableProviders = []) {
+  const ordered = [];
+  if (initialProvider) ordered.push(initialProvider);
+
+  const availableSet = new Set(availableProviders);
+  for (const provider of FALLBACK_PROVIDER_ORDER) {
+    if (!availableSet.has(provider)) continue;
+    if (!ordered.includes(provider)) {
+      ordered.push(provider);
+    }
+  }
+
+  for (const provider of availableProviders) {
+    if (!ordered.includes(provider)) ordered.push(provider);
+  }
+
+  return ordered;
+}
+
+function pickAggregateFailureStatus(attempts = []) {
+  if (attempts.some((attempt) => attempt.failureType === 'rate_limit' || attempt.status === 429)) {
+    return 429;
+  }
+  if (attempts.some((attempt) => attempt.failureType === 'timeout' || attempt.status === 408)) {
+    return 504;
+  }
+  if (attempts.some((attempt) => attempt.failureType === 'network_error')) {
+    return 503;
+  }
+  if (attempts.some((attempt) => Number(attempt.status) >= 500 || Number(attempt.status) === 0)) {
+    return 503;
+  }
+  return 502;
+}
+
+function buildClientFailureMessage(attempts = []) {
+  if (!attempts.length) {
+    return 'Unable to generate a response right now. Please try again.';
+  }
+
+  if (attempts.some((attempt) => attempt.failureType === 'rate_limit' || attempt.status === 429)) {
+    return 'AI providers are currently busy. Please retry in a moment.';
+  }
+  if (attempts.some((attempt) => attempt.failureType === 'quota_exceeded')) {
+    return 'AI capacity is temporarily exhausted. Please try again shortly.';
+  }
+  if (attempts.some((attempt) => attempt.failureType === 'timeout')) {
+    return 'The AI request timed out. Please try again.';
+  }
+  if (attempts.some((attempt) => attempt.failureType === 'network_error')) {
+    return 'A network issue interrupted the AI request. Please try again.';
+  }
+  if (attempts.some((attempt) => Number(attempt.status) >= 500 || Number(attempt.status) === 0)) {
+    return 'AI providers are temporarily unavailable. Please try again in a moment.';
+  }
+
+  return 'Unable to generate a response right now. Please try again.';
+}
+
+function isAbortLikeError(error) {
+  const name = String(error?.name || '').toLowerCase();
+  const message = String(error?.message || '').toLowerCase();
+  return name === 'aborterror' || message.includes('aborted') || message.includes('request aborted');
+}
+
 export class AiRouterError extends Error {
   constructor(message, { status = 500, details = [], metadata = {} } = {}) {
     super(message);
@@ -272,7 +338,16 @@ export async function routeChatRequest({
   chatMode = 'chat',
   responseMode = 'deep',
   timeoutMs,
+  signal,
 }) {
+  if (signal?.aborted) {
+    throw new AiRouterError('Request cancelled by client.', {
+      status: 499,
+      details: [],
+      metadata: { clientMessage: 'Request cancelled.' },
+    });
+  }
+
   const routeStart = Date.now();
   const selection = resolveModelSelection({
     requestedProvider,
@@ -309,75 +384,91 @@ export async function routeChatRequest({
     });
   }
 
-  const callStart = Date.now();
-  try {
-    const response = await callProvider(initialProvider, {
-      messages,
-      systemPrompt,
-      hasImageInput,
-      timeoutMs,
-    });
+  const attempts = [];
+  const providerOrder = buildProviderOrder(initialProvider, selection.availableProviders);
 
-    if (response.ok && response.body) {
-      return {
-        providerUsed: initialProvider,
-        primaryProvider: initialProvider,
-        fallbackUsed: false,
-        fallbackFrom: null,
-        routeReason: selection.routeReason,
-        attempts: [],
-        response,
-        queryComplexity: selection.complexity,
-        modelMode: selection.modelModeUsed,
-        elapsedMs: Date.now() - routeStart,
-        providerElapsedMs: Date.now() - callStart,
-      };
+  for (const provider of providerOrder) {
+    const callStart = Date.now();
+
+    try {
+      const response = await callProvider(provider, {
+        messages,
+        systemPrompt,
+        hasImageInput,
+        timeoutMs,
+        signal,
+      });
+
+      if (signal?.aborted) {
+        throw new AiRouterError('Request cancelled by client.', {
+          status: 499,
+          details: attempts,
+          metadata: { clientMessage: 'Request cancelled.' },
+        });
+      }
+
+      if (response.ok && response.body) {
+        return {
+          providerUsed: provider,
+          primaryProvider: initialProvider,
+          fallbackUsed: provider !== initialProvider,
+          fallbackFrom: provider !== initialProvider ? initialProvider : null,
+          routeReason: selection.routeReason,
+          attempts,
+          response,
+          queryComplexity: selection.complexity,
+          modelMode: selection.modelModeUsed,
+          elapsedMs: Date.now() - routeStart,
+          providerElapsedMs: Date.now() - callStart,
+        };
+      }
+
+      const providerError = await readResponseError(response);
+      const status = response.status && Number(response.status) > 0 ? Number(response.status) : 502;
+      attempts.push({
+        provider,
+        attempt: attempts.length + 1,
+        status,
+        failureType: detectFailureType({ status, errorText: providerError }),
+        error: providerError,
+        elapsedMs: Date.now() - callStart,
+      });
+    } catch (error) {
+      if (error instanceof AiRouterError && error.status === 499) {
+        throw error;
+      }
+
+      if (signal?.aborted || isAbortLikeError(error)) {
+        throw new AiRouterError('Request cancelled by client.', {
+          status: 499,
+          details: attempts,
+          metadata: { clientMessage: 'Request cancelled.' },
+        });
+      }
+
+      const message = error?.message || 'Unknown request failure.';
+      attempts.push({
+        provider,
+        attempt: attempts.length + 1,
+        status: 0,
+        failureType: detectFailureType({ status: 0, errorText: message }),
+        error: message,
+        elapsedMs: Date.now() - callStart,
+      });
     }
-
-    const providerError = await readResponseError(response);
-    throw new AiRouterError(`Selected AI provider failed: ${providerError}`, {
-      status: response.status && Number(response.status) > 0 ? Number(response.status) : 502,
-      details: [
-        {
-          provider: initialProvider,
-          attempt: 1,
-          status: response.status,
-          failureType: detectFailureType({ status: response.status, errorText: providerError }),
-          error: providerError,
-          elapsedMs: Date.now() - callStart,
-        },
-      ],
-      metadata: {
-        modelMode: selection.modelModeUsed,
-        complexity: selection.complexity,
-        initialProvider,
-        elapsedMs: Date.now() - routeStart,
-      },
-    });
-  } catch (error) {
-    if (error instanceof AiRouterError) {
-      throw error;
-    }
-
-    const message = error?.message || 'Unknown request failure.';
-    throw new AiRouterError(`Selected AI provider failed: ${message}`, {
-      status: 502,
-      details: [
-        {
-          provider: initialProvider,
-          attempt: 1,
-          status: 0,
-          failureType: detectFailureType({ status: 0, errorText: message }),
-          error: message,
-          elapsedMs: Date.now() - callStart,
-        },
-      ],
-      metadata: {
-        modelMode: selection.modelModeUsed,
-        complexity: selection.complexity,
-        initialProvider,
-        elapsedMs: Date.now() - routeStart,
-      },
-    });
   }
+
+  const clientMessage = buildClientFailureMessage(attempts);
+  throw new AiRouterError(clientMessage, {
+    status: pickAggregateFailureStatus(attempts),
+    details: attempts,
+    metadata: {
+      modelMode: selection.modelModeUsed,
+      complexity: selection.complexity,
+      initialProvider,
+      providerOrder,
+      clientMessage,
+      elapsedMs: Date.now() - routeStart,
+    },
+  });
 }

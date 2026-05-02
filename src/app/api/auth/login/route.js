@@ -1,6 +1,13 @@
 import { NextResponse } from 'next/server';
 import { getDb } from '@/lib/mongodb';
 import { comparePassword, hashPassword, signToken, createAuthCookie } from '@/lib/auth';
+import {
+  buildUsagePayload,
+  defaultPlanFields,
+  ensureLifetimeAccess,
+  getDailyUsage,
+  serializeUserPlan,
+} from '@/lib/billing';
 
 export async function POST(request) {
   try {
@@ -46,6 +53,7 @@ export async function POST(request) {
         email,
         name: finalName,
         password: hashed,
+        ...defaultPlanFields(email),
         createdAt: new Date(),
       });
 
@@ -53,6 +61,7 @@ export async function POST(request) {
         _id: result.insertedId,
         email,
         name: finalName,
+        ...defaultPlanFields(email),
       };
       autoCreated = true;
     }
@@ -87,12 +96,20 @@ export async function POST(request) {
       }
     }
 
+    user = await ensureLifetimeAccess(db, user);
+    const usage = await getDailyUsage(db, user._id.toString());
+    const usagePayload = buildUsagePayload(user, usage);
+
     const token = signToken(user._id.toString());
     const response = NextResponse.json({
       user: {
         id: user._id.toString(),
         email: user.email,
         name: user.name || user.email.split('@')[0],
+        avatar: user.avatar || null,
+        settings: user.settings || {},
+        ...serializeUserPlan(user),
+        usage: usagePayload,
       },
       autoCreated,
       passwordReset,

@@ -47,6 +47,7 @@ export async function GET(request, { params }) {
         id: m._id.toString(),
         role: m.role,
         content: m.content,
+        requestId: m.requestId || '',
         imageDataUrl: m.imageDataUrl || '',
         imageUrl: m.imageUrl || '',
         timestamp: m.timestamp,

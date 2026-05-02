@@ -1,183 +1,132 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { Download, Menu, Moon, Settings2, Sun } from 'lucide-react';
+import { Bell, ChevronLeft, ChevronRight, Menu, PanelLeftClose, PanelLeftOpen, Plus } from 'lucide-react';
 
-const modeOptions = [
-  { value: 'chat', label: 'Chat' },
-  { value: 'search', label: 'Search' },
-  { value: 'research', label: 'Research' },
-];
+function modelModeLabel(value) {
+  const normalized = String(value || 'auto').toLowerCase();
+  if (normalized === 'fast') return 'Fast';
+  if (normalized === 'smart') return 'Smart';
+  if (normalized === 'deep') return 'Deep';
+  return 'Auto';
+}
 
 export default function ChatHeader({
-  title,
-  chatMode,
-  onModeChange,
-  modelMode,
-  onModelModeChange,
-  isBusy,
+  deviceType,
+  tabletOrientation,
   onOpenSidebar,
+  onToggleSidebar,
+  sidebarOpen,
+  user,
+  onOpenSettings,
+  onOpenNotifications,
+  onCreateNewChat,
+  modelMode,
+  onCycleModelMode,
   theme,
   onToggleTheme,
-  onExport,
-  canExport,
-  isSearching,
-  isLoading,
-  imageLoading,
-  activeProvider,
-  ragUsed,
-  researchUsed,
-  searchProvider,
-  fallbackNotice,
-  latencyMs,
-  queryComplexity,
-  deviceType,
+  notificationCount,
+  onUpgradeClick,
 }) {
-  const [mobileSettingsOpen, setMobileSettingsOpen] = useState(false);
+  const isDesktop = deviceType === 'desktop';
   const isMobile = deviceType === 'mobile';
-  const activeTabIndex = Math.max(
-    0,
-    modeOptions.findIndex((option) => option.value === chatMode)
-  );
+  const isTablet = deviceType === 'tablet';
+  const initial = (user?.name || user?.email || 'A')[0]?.toUpperCase();
+  const isPremium = Boolean(user?.isPremium || user?.isLifetime);
 
-  useEffect(() => {
-    if (!isMobile) {
-      setMobileSettingsOpen(false);
-    }
-  }, [isMobile]);
+  if (isDesktop) {
+    return (
+      <header className="arithmo-desktop-header">
+        <div className="arithmo-desktop-header-spacer" />
 
-  const status = useMemo(() => {
-    if (isSearching) return 'Searching...';
-    if (isLoading) return 'Thinking...';
-    if (imageLoading) return 'Creating...';
-    return 'Online';
-  }, [isSearching, isLoading, imageLoading]);
+        <div className="arithmo-desktop-header-actions">
+          <button className="arithmo-header-pill" type="button" onClick={onCreateNewChat}>
+            <Plus size={14} /> New Chat
+          </button>
+
+          {!isPremium && (
+            <button className="arithmo-header-pill arithmo-upgrade-pill" type="button" onClick={onUpgradeClick}>
+              Upgrade
+            </button>
+          )}
+
+          {user?.isLifetime && <span className="arithmo-plan-badge lifetime">Lifetime</span>}
+          {!user?.isLifetime && user?.isPremium && <span className="arithmo-plan-badge pro">Pro</span>}
+
+          <button
+            className="arithmo-header-pill arithmo-model-pill"
+            type="button"
+            onClick={onCycleModelMode}
+            aria-label="Switch model mode"
+            title="Switch model mode"
+          >
+            <span>Model:</span> <strong>{modelModeLabel(modelMode)}</strong>
+          </button>
+
+          <button className="arithmo-header-circle" type="button" aria-label="Notifications" onClick={onOpenNotifications}>
+            <Bell size={15} />
+            {notificationCount > 0 && <span className="arithmo-dot-indicator" />}
+          </button>
+
+          <button className="arithmo-header-avatar" type="button" aria-label="Account settings" onClick={onOpenSettings}>
+            {user?.avatar ? <img src={user.avatar} alt="User" /> : <span>{initial}</span>}
+          </button>
+        </div>
+      </header>
+    );
+  }
 
   return (
-    <header className="app-header">
-      <div className="header-main-row">
-        <div className="header-left">
-          <button className="mobile-menu-btn" onClick={onOpenSidebar} type="button" aria-label="Open chats">
-            <Menu size={18} strokeWidth={2.2} />
-          </button>
-          <div className="header-title-wrap">
-            <div className="header-brand">
-              <img src="/logo.png" alt="" aria-hidden="true" className="header-brand-logo" />
-              <span style={{ 
-                background: 'var(--gradient-accent)', 
-                WebkitBackgroundClip: 'text', 
-                WebkitTextFillColor: 'transparent',
-                fontWeight: 800,
-                letterSpacing: '-0.02em',
-                fontSize: '1.05rem',
-                animation: 'pulse-badge 4s ease-in-out infinite'
-              }}>Arithmo AI</span>
-            </div>
-            <span className="chat-title">{title || 'New conversation'}</span>
-          </div>
-        </div>
-        <div className="header-actions">
-          {canExport && (
-            <button
-              className="glass-icon-btn"
-              type="button"
-              onClick={onExport}
-              title="Export conversation"
-              aria-label="Export conversation"
-            >
-              <Download size={16} />
-            </button>
-          )}
-          <button
-            className="glass-icon-btn"
-            type="button"
-            onClick={onToggleTheme}
-            title="Toggle theme"
-            aria-label="Toggle theme"
-          >
-            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-          </button>
+    <header className="arithmo-mobile-header">
+      <div className="arithmo-mobile-header-top">
+        <div className="arithmo-mobile-header-left">
           {isMobile && (
-            <button
-              className={`glass-icon-btn ${mobileSettingsOpen ? 'active' : ''}`}
-              type="button"
-              onClick={() => setMobileSettingsOpen((value) => !value)}
-              title="Chat settings"
-              aria-label="Chat settings"
-              aria-expanded={mobileSettingsOpen}
-            >
-              <Settings2 size={16} />
+            <button className="mobile-menu-btn" onClick={onOpenSidebar} type="button" aria-label="Open sidebar">
+              <Menu size={24} />
             </button>
           )}
-        </div>
-      </div>
 
-      <div className="header-sub-row">
-        <div
-          className="mode-switch"
-          role="tablist"
-          aria-label="Conversation mode"
-          style={{ '--mode-index': activeTabIndex }}
-        >
-          {modeOptions.map((option) => (
+          {isTablet && (
             <button
-              key={option.value}
-              className={`mode-chip ${chatMode === option.value ? 'active' : ''}`}
-              onClick={() => onModeChange(option.value)}
+              className={`tablet-sidebar-toggle ${sidebarOpen ? 'is-open' : ''}`}
+              onClick={onToggleSidebar}
               type="button"
-              role="tab"
-              aria-selected={chatMode === option.value}
-              disabled={isBusy}
+              aria-label={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
             >
-              {option.label}
+              {sidebarOpen ? <PanelLeftClose size={20} /> : <PanelLeftOpen size={20} />}
             </button>
-          ))}
+          )}
+
+          <div className="arithmo-mobile-brand">
+            <img src="/logo.png" alt="Arithmo Logo" />
+            <span>Arithmo</span>
+          </div>
         </div>
 
-        {!isMobile && (
-          <div className="header-settings">
-            <select
-              className="model-select"
-              value={modelMode}
-              onChange={(event) => onModelModeChange(event.target.value)}
-              disabled={isBusy}
-              title="Model mode"
-            >
-              <option value="auto">🤖 Auto</option>
-              <option value="fast">⚡ Fast (Groq)</option>
-              <option value="smart">🧠 Smart (Gemini)</option>
-              <option value="deep">🔬 Deep (NVIDIA)</option>
-            </select>
-          </div>
-        )}
+        <div className="arithmo-mobile-header-actions">
+          <button
+            className="arithmo-header-pill arithmo-model-pill mobile"
+            type="button"
+            onClick={onCycleModelMode}
+            aria-label="Switch model mode"
+          >
+            {modelModeLabel(modelMode)}
+          </button>
 
-        <div className={`status-strip ${isMobile ? 'compact' : ''}`}>
-          <span className={`status-badge ${isBusy ? 'thinking' : 'online'}`}>{status}</span>
-          <span className="status-badge online">Using: {activeProvider}</span>
-          {fallbackNotice && <span className="status-badge thinking">{fallbackNotice}</span>}
-          {!isMobile && queryComplexity && <span className="status-badge online">Complexity: {queryComplexity}</span>}
-          {!isMobile && latencyMs > 0 && <span className="status-badge online">{latencyMs}ms</span>}
-          {!isMobile && ragUsed && <span className="status-badge online">Search: {searchProvider}</span>}
-          {!isMobile && researchUsed && <span className="status-badge online">Research</span>}
+          {!isPremium && (
+            <button className="arithmo-header-pill arithmo-upgrade-pill mobile" type="button" onClick={onUpgradeClick}>
+              Upgrade
+            </button>
+          )}
+
+          <button className="arithmo-header-circle" type="button" aria-label="New chat" onClick={onCreateNewChat}>
+            <Plus size={14} />
+          </button>
+
+          <button className="arithmo-mobile-avatar" type="button" onClick={onOpenSettings} aria-label="Open profile settings">
+            {user?.avatar ? <img src={user.avatar} alt="User" /> : initial}
+          </button>
         </div>
       </div>
-
-      {isMobile && mobileSettingsOpen && (
-        <div className="mobile-settings-panel">
-          <select
-            className="model-select"
-            value={modelMode}
-            onChange={(event) => onModelModeChange(event.target.value)}
-            disabled={isBusy}
-            title="Model mode"
-          >
-            <option value="auto">🤖 Auto</option>
-            <option value="fast">⚡ Fast (Groq)</option>
-            <option value="smart">🧠 Smart (Gemini)</option>
-            <option value="deep">🔬 Deep (NVIDIA)</option>
-          </select>
-        </div>
-      )}
     </header>
   );
 }

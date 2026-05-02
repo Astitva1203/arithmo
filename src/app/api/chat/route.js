@@ -1,6 +1,15 @@
 import { NextResponse } from 'next/server';
 import { getDb } from '@/lib/mongodb';
 import { getAuthUser } from '@/lib/auth';
+import {
+  AccessError,
+  accessErrorPayload,
+  assertPremiumFeature,
+  ensureLifetimeAccess,
+  getEffectiveModelMode,
+  getEffectiveProvider,
+  incrementUsageOrThrow,
+} from '@/lib/billing';
 import { AiRouterError, routeChatRequest } from '@/router/aiRouter';
 import { isGroqConfigured, requestGroqChatCompletion } from '@/services/ai/groqService';
 import { isGeminiConfigured, requestGeminiChatCompletion } from '@/services/ai/geminiService';
@@ -15,7 +24,7 @@ import {
 
 export const runtime = 'nodejs';
 
-const BASE_SYSTEM_PROMPT = `You are Arithmo AI, an intelligent adaptive tutor designed to personalize explanations based on user understanding.
+const BASE_SYSTEM_PROMPT = `You are Arithmo AI, a product of Tech You. You are an intelligent learning, research, and productivity assistant designed to help users think clearly, not just get answers.
 
 Core behavior:
 - Adapt for Beginner, Intermediate, or Advanced users.
@@ -23,10 +32,19 @@ Core behavior:
 - Teach clearly instead of giving only final answers.
 - Use structured steps for learner-focused explanations when helpful.
 - Detect and correct mistakes with constructive reasoning.
+- Maintain conversation context and connect new answers to what the user already asked.
+- If you notice a likely understanding gap, briefly name the missing concept and suggest what to learn next.
 
 Mode behavior:
 - SPEED MODE: concise, direct, minimal text.
 - DEEP MODE: detailed, step-by-step, clear logic.
+
+Learning features:
+- Reverse Learning Mode asks guiding questions and gives hints before final answers.
+- Explain Back Mode evaluates the user's explanation, corrects mistakes, and encourages improvement.
+- Practice requests should produce useful questions, answer keys, difficulty notes, and one improvement tip.
+- Smart summaries should turn content into notes and key points.
+- Thinking Path means visible teaching steps only; never reveal hidden chain-of-thought.
 
 Instruction quality:
 - Use clean formatting with bullets and short sections.
@@ -66,11 +84,12 @@ const MAX_IMAGE_DATA_URL_LENGTH = 6_000_000;
 const MAX_IMAGES_PER_REQUEST = 5;
 const TITLE_REFINE_MIN_USER_MESSAGES = 2;
 const TITLE_REFINE_SEED_LIMIT = 8;
-const DAILY_IMAGE_LIMIT = Number(process.env.DAILY_IMAGE_LIMIT || 3);
 const FREEPIK_POLL_INTERVAL_MS = 1_500;
 const FREEPIK_POLL_TIMEOUT_MS = 45_000;
 const ACTION_CHAT = 'chat';
 const ACTION_PRACTICE = 'practice';
+const MAX_CLIENT_REQUEST_ID_LENGTH = 120;
+const LEARNING_MODE_VALUES = new Set(['off', 'reverse', 'explain']);
 
 function sanitizeText(value) {
   if (typeof value !== 'string') return '';
@@ -207,6 +226,14 @@ function normalizeAction(value) {
   return ACTION_CHAT;
 }
 
+function normalizeLearningMode(value) {
+  const mode = String(value || 'off')
+    .trim()
+    .toLowerCase();
+  if (LEARNING_MODE_VALUES.has(mode)) return mode;
+  return 'off';
+}
+
 function normalizeCommandText(text) {
   return String(text || '')
     .toLowerCase()
@@ -279,6 +306,7 @@ function buildSystemPrompt({
   responseMode,
   difficultyShift,
   chatMode,
+  learningMode,
   searchContext,
   searchFailed,
   searchError,
@@ -304,6 +332,19 @@ function buildSystemPrompt({
   } else if (difficultyShift <= -2) {
     difficultyBlock =
       'Difficulty preference: Much easier with very simple language and minimal jargon.';
+  }
+
+  let learningBlock = '';
+  if (learningMode === 'reverse') {
+    learningBlock = `REVERSE LEARNING MODE:
+- Ask 1 to 2 guiding questions before giving a final answer.
+- Nudge the learner with hints and wait for their attempt.
+- Keep the tone encouraging and step-by-step.`;
+  } else if (learningMode === 'explain') {
+    learningBlock = `EXPLAIN BACK MODE:
+- Evaluate the learner's explanation for correctness.
+- Identify gaps, then provide one targeted correction.
+- End with one short follow-up check question.`;
   }
 
   const reasoningGuard =
@@ -342,6 +383,8 @@ Search issue: ${searchError || 'unknown error'}.`
 ${modeBlock}
 
 ${difficultyBlock}
+
+${learningBlock ? `${learningBlock}\n\n` : ''}
 
 ${reasoningGuard}
 
@@ -408,9 +451,45 @@ function normalizeModelMode(value) {
   return 'auto';
 }
 
+function normalizeClientRequestId(value) {
+  const normalized = String(value || '').trim();
+  if (!normalized) return '';
+  return normalized.slice(0, MAX_CLIENT_REQUEST_ID_LENGTH);
+}
+
+function isAbortLikeError(error) {
+  const name = String(error?.name || '').toLowerCase();
+  const message = String(error?.message || '').toLowerCase();
+  return name === 'aborterror' || message.includes('aborted') || message.includes('request aborted');
+}
+
+function getClientFacingRouterMessage(error) {
+  const metadataMessage = sanitizeText(error?.metadata?.clientMessage || '');
+  if (metadataMessage) return metadataMessage;
+
+  const raw = sanitizeText(error?.message || '');
+  if (!raw) {
+    return 'Unable to generate a response right now. Please try again.';
+  }
+
+  const lower = raw.toLowerCase();
+  if (
+    lower.includes('selected ai provider failed') ||
+    lower.includes('http ') ||
+    lower.includes('upstream') ||
+    lower.includes('socket') ||
+    lower.includes('fetch') ||
+    lower.includes('status code')
+  ) {
+    return 'AI providers are temporarily unavailable. Please try again in a moment.';
+  }
+
+  return raw;
+}
+
 function normalizeGeneratedTitle(rawTitle, fallback) {
   const cleaned = String(rawTitle || '')
-    .replace(/["'“”‘’]/g, '')
+    .replace(/["'\u201c\u201d\u2018\u2019]/g, '')
     .replace(/[:;.,!?/\\|[\]{}()<>-]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -573,37 +652,6 @@ async function generateImage(prompt, apiKey) {
   throw new Error('Image generation timed out. Try again.');
 }
 
-function getTodayKey() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-async function checkAndIncrementImageUsage(userId) {
-  try {
-    const db = await getDb();
-    if (!db) return { allowed: true, remaining: DAILY_IMAGE_LIMIT };
-
-    const today = getTodayKey();
-    const key = `${userId}_${today}`;
-    const usage = await db.collection('usage').findOne({ _id: key });
-    const used = usage?.images || 0;
-
-    if (used >= DAILY_IMAGE_LIMIT) {
-      return { allowed: false, remaining: 0, used, limit: DAILY_IMAGE_LIMIT };
-    }
-
-    await db.collection('usage').updateOne(
-      { _id: key },
-      { $inc: { images: 1 }, $setOnInsert: { userId, date: today } },
-      { upsert: true }
-    );
-
-    return { allowed: true, remaining: DAILY_IMAGE_LIMIT - used - 1 };
-  } catch (error) {
-    console.error('Image usage check error (non-fatal):', error?.message || error);
-    return { allowed: true, remaining: DAILY_IMAGE_LIMIT };
-  }
-}
-
 function appendSourcesIfNeeded(responseText, sourcesMarkdown, sourceUrls) {
   if (!sourcesMarkdown) return responseText;
   const text = String(responseText || '');
@@ -672,6 +720,7 @@ Return exactly:
 
 export async function POST(request) {
   try {
+    const requestSignal = request.signal;
     let body;
     try {
       body = await request.json();
@@ -680,18 +729,35 @@ export async function POST(request) {
     }
 
     const auth = getAuthUser(request);
-    const userId = auth?.userId || 'anonymous';
+    if (!auth?.userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const db = await getDb();
+    if (!db) {
+      return NextResponse.json({ error: 'Database not available. Please try again later.' }, { status: 503 });
+    }
+
+    const { ObjectId } = await import('mongodb');
+    let currentUser = null;
+    try {
+      currentUser = await db.collection('users').findOne(
+        { _id: ObjectId.createFromHexString(auth.userId) },
+        { projection: { password: 0 } }
+      );
+    } catch {
+      return NextResponse.json({ error: 'Invalid session. Please sign in again.' }, { status: 401 });
+    }
+
+    if (!currentUser) {
+      return NextResponse.json({ error: 'User not found. Please sign in again.' }, { status: 401 });
+    }
+
+    currentUser = await ensureLifetimeAccess(db, currentUser);
+    const userId = auth.userId;
 
     // Image generation mode
     if (body?.generateImage) {
-      const usage = await checkAndIncrementImageUsage(userId);
-      if (!usage.allowed) {
-        return NextResponse.json(
-          { error: `Daily image limit reached (${DAILY_IMAGE_LIMIT}/day). Try again tomorrow.` },
-          { status: 429 }
-        );
-      }
-
       const freepikKey = process.env.FREEPIK_API_KEY;
       if (!freepikKey) {
         return NextResponse.json(
@@ -705,13 +771,31 @@ export async function POST(request) {
         return NextResponse.json({ error: 'Image prompt is required.' }, { status: 400 });
       }
 
+      let usage;
+      try {
+        usage = await incrementUsageOrThrow(db, {
+          user: currentUser,
+          userId,
+          units: { images: 1 },
+        });
+      } catch (error) {
+        if (error instanceof AccessError) {
+          return NextResponse.json(
+            accessErrorPayload(error),
+            { status: error.status }
+          );
+        }
+        throw error;
+      }
+
       try {
         const imageUrl = await generateImage(prompt, freepikKey);
         return NextResponse.json({
           type: 'image',
           content: `Generated image for: "${prompt}"\n\nConfidence: Medium\nReason: Output quality depends on prompt precision and model interpretation.`,
           imageUrl,
-          remaining: usage.remaining,
+          remaining: usage.remaining?.images ?? null,
+          usage,
         });
       } catch (error) {
         return NextResponse.json(
@@ -737,9 +821,11 @@ export async function POST(request) {
 
     const hasImageInput = imageCount > 0;
     const chatId = body?.chatId || null;
+    const clientRequestId = normalizeClientRequestId(body?.clientRequestId);
     const requestedProvider = normalizeProvider(body?.provider);
     const modelMode = normalizeModelMode(body?.modelMode);
     const chatMode = normalizeChatMode(body?.chatMode);
+    const learningMode = normalizeLearningMode(body?.learningMode);
     const action = normalizeAction(body?.action);
 
     const difficultyAdjusted = applyInstantDifficultyCommand(safeMessages).messages;
@@ -758,6 +844,88 @@ export async function POST(request) {
     const requestedResponseMode = normalizeResponseMode(body?.responseMode || body?.mode);
     const responseMode = requestedResponseMode || inferResponseMode(latestUserText);
     const difficultyShift = getDifficultyShift(safeMessages);
+    const lastUserMessage = [...effectiveMessages].reverse().find((m) => m.role === 'user');
+    const userContent = getMessageText(lastUserMessage?.content) || 'Please analyze this image.';
+    const userImageDataUrl = getMessageImageUrl(lastUserMessage?.content);
+    let usage;
+
+    try {
+      assertPremiumFeature(currentUser, 'modelMode', modelMode);
+      assertPremiumFeature(currentUser, 'learningMode', learningMode);
+      usage = await incrementUsageOrThrow(db, {
+        user: currentUser,
+        userId,
+        units: {
+          chat: 1,
+          search: chatMode === 'search' ? 1 : 0,
+          research: chatMode === 'research' ? 1 : 0,
+        },
+      });
+    } catch (error) {
+      if (error instanceof AccessError) {
+        return NextResponse.json(
+          accessErrorPayload(error),
+          { status: error.status }
+        );
+      }
+      throw error;
+    }
+
+    const effectiveModelMode = getEffectiveModelMode(currentUser, modelMode);
+    const effectiveRequestedProvider = getEffectiveProvider(currentUser, requestedProvider);
+    let shouldGenerateInitialTitle = false;
+
+    if (auth?.userId && chatId) {
+      try {
+        const db = await getDb();
+        if (db) {
+          const now = new Date();
+          const userMessageDoc = {
+            chatId,
+            role: 'user',
+            content: userContent,
+            ...(userImageDataUrl ? { imageDataUrl: userImageDataUrl } : {}),
+            ...(clientRequestId ? { requestId: clientRequestId } : {}),
+            timestamp: now,
+          };
+
+          if (clientRequestId) {
+            await db.collection('messages').updateOne(
+              { chatId, role: 'user', requestId: clientRequestId },
+              { $setOnInsert: userMessageDoc },
+              { upsert: true }
+            );
+          } else {
+            await db.collection('messages').insertOne(userMessageDoc);
+          }
+
+          const { ObjectId } = await import('mongodb');
+          if (ObjectId.isValid(chatId)) {
+            const chatObjectId = ObjectId.createFromHexString(chatId);
+            const existingChat = await db.collection('chats').findOne(
+              { _id: chatObjectId, userId: auth.userId },
+              { projection: { title: 1 } }
+            );
+
+            if (existingChat?.title === 'New Chat') {
+              shouldGenerateInitialTitle = true;
+              const quickTitle = normalizeGeneratedTitle('', userContent);
+              await db.collection('chats').updateOne(
+                { _id: chatObjectId, userId: auth.userId },
+                { $set: { title: quickTitle, updatedAt: now } }
+              );
+            } else {
+              await db.collection('chats').updateOne(
+                { _id: chatObjectId, userId: auth.userId },
+                { $set: { updatedAt: now } }
+              );
+            }
+          }
+        }
+      } catch (error) {
+        console.error('User message pre-save error (non-fatal):', error);
+      }
+    }
 
     // RAG / search stage
     const wantSearch = shouldUseWebSearch({ query: latestUserText, chatMode });
@@ -787,6 +955,7 @@ export async function POST(request) {
       responseMode,
       difficultyShift,
       chatMode,
+      learningMode,
       searchContext,
       searchFailed: wantSearch && !searchResult.used,
       searchError: searchResult.error,
@@ -795,8 +964,8 @@ export async function POST(request) {
     let routeResult;
     try {
       routeResult = await routeChatRequest({
-        requestedProvider,
-        modelMode,
+        requestedProvider: effectiveRequestedProvider,
+        modelMode: effectiveModelMode,
         messages: effectiveMessages,
         systemPrompt,
         latestUserText,
@@ -804,14 +973,22 @@ export async function POST(request) {
         chatMode,
         responseMode,
         timeoutMs: 75_000,
+        signal: requestSignal,
       });
     } catch (error) {
       if (error instanceof AiRouterError) {
+        if (error.status === 499 || requestSignal?.aborted) {
+          return new Response(null, { status: 499 });
+        }
+
+        const payload = {
+          error: getClientFacingRouterMessage(error),
+        };
+        if (process.env.NODE_ENV !== 'production') {
+          payload.details = error.details || [];
+        }
         return NextResponse.json(
-          {
-            error: error.message,
-            details: error.details || [],
-          },
+          payload,
           { status: error.status || 502 }
         );
       }
@@ -827,17 +1004,27 @@ export async function POST(request) {
     const fallbackFrom = routeResult.fallbackFrom || '';
     const queryComplexity = routeResult.queryComplexity || 'medium';
     const routeReason = routeResult.routeReason || 'auto_router';
-    const modelModeUsed = routeResult.modelMode || modelMode || 'auto';
+    const modelModeUsed = routeResult.modelMode || effectiveModelMode || 'auto';
     const elapsedMs = Number(routeResult.elapsedMs || 0);
-
-    const lastUserMessage = [...effectiveMessages].reverse().find((m) => m.role === 'user');
-    const userContent = getMessageText(lastUserMessage?.content) || 'Please analyze this image.';
-    const userImageDataUrl = getMessageImageUrl(lastUserMessage?.content);
 
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
     const reader = upstream.body.getReader();
     let fullResponse = '';
+    let requestWasAborted = Boolean(requestSignal?.aborted);
+
+    if (requestSignal && !requestSignal.aborted) {
+      requestSignal.addEventListener(
+        'abort',
+        () => {
+          requestWasAborted = true;
+          try {
+            reader.cancel('Client disconnected');
+          } catch {}
+        },
+        { once: true }
+      );
+    }
 
     const stream = new ReadableStream({
       async start(controller) {
@@ -901,10 +1088,19 @@ export async function POST(request) {
             }
           }
         } catch (error) {
-          const streamError = `\n\n[Stream error] ${error?.message || 'Unknown stream issue'}`;
-          fullResponse += streamError;
-          controller.enqueue(encoder.encode(streamError));
+          if (requestSignal?.aborted || isAbortLikeError(error)) {
+            requestWasAborted = true;
+          } else {
+            const streamError = `\n\n[Stream error] ${error?.message || 'Unknown stream issue'}`;
+            fullResponse += streamError;
+            controller.enqueue(encoder.encode(streamError));
+          }
         } finally {
+          if (requestWasAborted || requestSignal?.aborted) {
+            controller.close();
+            return;
+          }
+
           if (wantSearch && !searchResult.used && (chatMode === 'search' || chatMode === 'research')) {
             const freshnessNote = appendSectionIfMissing(
               fullResponse,
@@ -962,32 +1158,47 @@ export async function POST(request) {
               if (!db) throw new Error('DB unavailable');
               const now = new Date();
 
-              await db.collection('messages').insertMany([
-                {
-                  chatId,
-                  role: 'user',
-                  content: userContent,
-                  ...(userImageDataUrl ? { imageDataUrl: userImageDataUrl } : {}),
-                  timestamp: now,
-                },
-                {
-                  chatId,
-                  role: 'assistant',
-                  content: fullResponse,
-                  provider: providerUsed,
-                  modelMode: modelModeUsed,
-                  routeReason,
-                  queryComplexity,
-                  fallbackUsed,
-                  fallbackFrom,
-                  mode: chatMode,
-                  action,
-                  ragUsed: Boolean(searchResult.used),
-                  researchUsed: chatMode === 'research' && Boolean(searchResult.used),
-                  sources: searchResult.results || [],
-                  timestamp: new Date(now.getTime() + 1),
-                },
-              ]);
+              const userMessageDoc = {
+                chatId,
+                role: 'user',
+                content: userContent,
+                ...(userImageDataUrl ? { imageDataUrl: userImageDataUrl } : {}),
+                ...(clientRequestId ? { requestId: clientRequestId } : {}),
+                timestamp: now,
+              };
+              const assistantMessageDoc = {
+                chatId,
+                role: 'assistant',
+                content: fullResponse,
+                ...(clientRequestId ? { requestId: clientRequestId } : {}),
+                provider: providerUsed,
+                modelMode: modelModeUsed,
+                routeReason,
+                queryComplexity,
+                fallbackUsed,
+                fallbackFrom,
+                mode: chatMode,
+                action,
+                ragUsed: Boolean(searchResult.used),
+                researchUsed: chatMode === 'research' && Boolean(searchResult.used),
+                sources: searchResult.results || [],
+                timestamp: new Date(now.getTime() + 1),
+              };
+
+              if (clientRequestId) {
+                await db.collection('messages').updateOne(
+                  { chatId, role: 'user', requestId: clientRequestId },
+                  { $setOnInsert: userMessageDoc },
+                  { upsert: true }
+                );
+                await db.collection('messages').updateOne(
+                  { chatId, role: 'assistant', requestId: clientRequestId },
+                  { $setOnInsert: assistantMessageDoc },
+                  { upsert: true }
+                );
+              } else {
+                await db.collection('messages').insertMany([userMessageDoc, assistantMessageDoc]);
+              }
 
               const { ObjectId } = await import('mongodb');
               if (!ObjectId.isValid(chatId)) {
@@ -1004,7 +1215,7 @@ export async function POST(request) {
                 return;
               }
 
-              if (chat.title === 'New Chat') {
+              if (chat.title === 'New Chat' || shouldGenerateInitialTitle) {
                 const firstUserMessages = await db.collection('messages')
                   .find({ chatId, role: 'user' })
                   .sort({ timestamp: 1 })
@@ -1079,6 +1290,9 @@ export async function POST(request) {
         'x-rag-used': searchResult.used ? '1' : '0',
         'x-search-provider': searchResult.provider || 'none',
         'x-research-used': chatMode === 'research' && searchResult.used ? '1' : '0',
+        'x-usage-chat-remaining': String(usage?.remaining?.chat ?? ''),
+        'x-usage-search-remaining': String(usage?.remaining?.search ?? ''),
+        'x-usage-research-remaining': String(usage?.remaining?.research ?? ''),
       },
     });
   } catch (error) {

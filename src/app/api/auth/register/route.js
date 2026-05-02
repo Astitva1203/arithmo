@@ -1,6 +1,13 @@
 import { NextResponse } from 'next/server';
 import { getDb } from '@/lib/mongodb';
 import { hashPassword, signToken, createAuthCookie } from '@/lib/auth';
+import {
+  buildUsagePayload,
+  defaultPlanFields,
+  ensureLifetimeAccess,
+  getDailyUsage,
+  serializeUserPlan,
+} from '@/lib/billing';
 
 export async function POST(request) {
   try {
@@ -37,12 +44,24 @@ export async function POST(request) {
     }
 
     const hashed = await hashPassword(password);
+    const planFields = defaultPlanFields(email);
     const result = await users.insertOne({
       email,
       name,
       password: hashed,
+      ...planFields,
       createdAt: new Date(),
     });
+
+    let user = {
+      _id: result.insertedId,
+      email,
+      name,
+      ...planFields,
+    };
+    user = await ensureLifetimeAccess(db, user);
+    const usage = await getDailyUsage(db, result.insertedId.toString());
+    const usagePayload = buildUsagePayload(user, usage);
 
     const token = signToken(result.insertedId.toString());
     const response = NextResponse.json({
@@ -50,6 +69,8 @@ export async function POST(request) {
         id: result.insertedId.toString(),
         email,
         name,
+        ...serializeUserPlan(user),
+        usage: usagePayload,
       },
     });
 

@@ -1,186 +1,267 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { MessageSquare, Plus, Edit2, Trash2, Check, X, Search, LogOut, Settings } from 'lucide-react';
+import { ChevronDown, MessageSquare, Plus, Search, Settings, Trash2, X } from 'lucide-react';
 
-const PAGE_SIZE = 18;
+function formatChatTimestamp(chat) {
+  const rawValue = chat?.updatedAt || chat?.createdAt || chat?.timestamp;
+  if (!rawValue) return '';
+
+  const parsed = new Date(rawValue);
+  if (Number.isNaN(parsed.getTime())) return '';
+
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfDate = new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+  const dayDiff = Math.round((startOfToday.getTime() - startOfDate.getTime()) / 86400000);
+
+  if (dayDiff === 0) {
+    return parsed.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  }
+  if (dayDiff === 1) {
+    return 'Yesterday';
+  }
+  if (dayDiff > 1 && dayDiff < 7) {
+    return `${dayDiff} days ago`;
+  }
+
+  return parsed.toLocaleDateString();
+}
 
 export default function ChatSidebar({
   user,
   chats,
   activeChatId,
-  renamingId,
-  renameValue,
-  onRenameValueChange,
-  onSubmitRename,
-  onCancelRename,
   onSelectChat,
-  onStartRename,
   onDeleteChat,
   onCreateNewChat,
-  onLogout,
-  onOpenSettings,
   sidebarOpen,
   onCloseSidebar,
+  onOpenSettings,
+  deviceType,
+  tabletOrientation,
+  onToggleCollapse,
+  isCollapsed,
+  recentChatsExpanded,
+  onToggleRecentChats,
+  showChatTimestamps,
+  onUpgradeClick,
 }) {
-  const [query, setQuery] = useState('');
-  const [limit, setLimit] = useState(PAGE_SIZE);
-  const [deletingId, setDeletingId] = useState(null);
-
+  const isDesktop = deviceType === 'desktop';
+  const isTablet = deviceType === 'tablet';
+  const showFullSidebar = isDesktop || isTablet;
+  const allRecentChats = Array.isArray(chats) ? chats : [];
+  const userInitial = (user?.name || user?.email || 'A')[0]?.toUpperCase();
+  const isPremium = Boolean(user?.isPremium || user?.isLifetime);
+  const [chatSearch, setChatSearch] = useState('');
+  const normalizedSearch = chatSearch.trim().toLowerCase();
   const filteredChats = useMemo(() => {
-    const normalized = query.trim().toLowerCase();
-    if (!normalized) return chats;
-    return chats.filter((chat) => String(chat.title || '').toLowerCase().includes(normalized));
-  }, [chats, query]);
+    if (!normalizedSearch) return allRecentChats;
+    return allRecentChats.filter((chat) =>
+      String(chat?.title || '').toLowerCase().includes(normalizedSearch)
+    );
+  }, [allRecentChats, normalizedSearch]);
+  const recentChats = recentChatsExpanded ? filteredChats : filteredChats.slice(0, 4);
 
-  const visibleChats = useMemo(() => filteredChats.slice(0, limit), [filteredChats, limit]);
-  const hasMore = filteredChats.length > limit;
+  // In portrait tablet mode, the overlay dims and blurs the background
+  const isTabletPortraitOverlay = isTablet && tabletOrientation === 'portrait' && sidebarOpen;
 
+  // ── COLLAPSED VIEW (Desktop only) ──
+  // Ultra-minimal: Logo (toggle) → New Chat icon → Profile avatar
+  if (isDesktop && isCollapsed) {
+    return (
+      <>
+        <aside className="sidebar arithmo-sidebar collapsed">
+          {/* Logo — acts as expand toggle */}
+          <div className="collapsed-top">
+            <button
+              className="collapsed-logo-btn"
+              type="button"
+              aria-label="Expand sidebar"
+              title="Expand sidebar"
+              onClick={onToggleCollapse}
+            >
+              <img src="/logo.png" alt="Arithmo" />
+            </button>
+          </div>
+
+          {/* New Chat — icon only */}
+          <div className="collapsed-center">
+            <button
+              className="collapsed-icon-btn"
+              type="button"
+              aria-label="New Chat"
+              title="New Chat"
+              onClick={onCreateNewChat}
+            >
+              <Plus size={20} />
+            </button>
+          </div>
+
+          {/* Profile — avatar only */}
+          <div className="collapsed-bottom">
+            <button
+              className="collapsed-avatar-btn"
+              type="button"
+              aria-label="Profile & Settings"
+              title="Profile & Settings"
+              onClick={onOpenSettings}
+            >
+              {user?.avatar ? (
+                <img src={user.avatar} alt={user?.name || 'User'} />
+              ) : (
+                userInitial
+              )}
+            </button>
+          </div>
+        </aside>
+      </>
+    );
+  }
+
+  // ── EXPANDED VIEW (Desktop, Tablet, Mobile) ──
   return (
     <>
-      <div className={`mobile-overlay ${sidebarOpen ? 'visible' : ''}`} onClick={onCloseSidebar} />
-      <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
-        <div className="sidebar-header">
-          <div className="sidebar-brand">
-            <img src="/logo.png" alt="Arithmo AI logo" />
-            <div>
-              <h2>Arithmo AI</h2>
-              <p>Conversations</p>
-            </div>
+      {/* Overlay: blur + dim in portrait tablet, standard dim for mobile */}
+      <div
+        className={`mobile-overlay ${sidebarOpen ? 'visible' : ''} ${isTabletPortraitOverlay ? 'tablet-portrait-overlay' : ''}`}
+        onClick={onCloseSidebar}
+      />
+      <aside className={`sidebar arithmo-sidebar ${sidebarOpen ? 'open' : ''}`}>
+        <div className="arithmo-sidebar-top">
+          <div className="arithmo-brand-row">
+            {isDesktop ? (
+              <button
+                className="arithmo-brand-toggle"
+                type="button"
+                aria-label="Collapse sidebar"
+                title="Collapse sidebar"
+                onClick={onToggleCollapse}
+              >
+                <img src="/logo.png" alt="Arithmo" className="arithmo-brand-logo" />
+                <h2>Arithmo</h2>
+              </button>
+            ) : (
+              <>
+                <img src="/logo.png" alt="Arithmo" className="arithmo-brand-logo" />
+                <h2>Arithmo</h2>
+              </>
+            )}
           </div>
-          <button className="new-chat-btn" onClick={onCreateNewChat} type="button">
-            <Plus size={16} /> New Chat
+          {isTablet && (
+            <button className="tablet-sidebar-close-btn" type="button" aria-label="Close sidebar" onClick={onCloseSidebar}>
+              <X size={18} />
+            </button>
+          )}
+        </div>
+
+        <div className="arithmo-sidebar-scroll">
+
+          <button
+            type="button"
+            className="arithmo-new-chat-btn"
+            onClick={() => {
+              onCreateNewChat?.();
+              if (isTablet && tabletOrientation === 'portrait') {
+                onCloseSidebar?.();
+              }
+            }}
+          >
+            <Plus size={15} />
+            <span>New Chat</span>
           </button>
-          
-          <div style={{ position: 'relative' }}>
-            <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-            <input
-              className="chat-search"
-              style={{ paddingLeft: '32px' }}
-              value={query}
-              onChange={(event) => {
-                setQuery(event.target.value);
-                setLimit(PAGE_SIZE);
-              }}
-              placeholder="Search chats..."
-            />
-          </div>
-        </div>
 
-        <div className="sidebar-chats">
-          {visibleChats.map((chat) => (
-            <div
-              key={chat.id}
-              className={`chat-item ${activeChatId === chat.id ? 'active' : ''}`}
-              onClick={() => onSelectChat(chat.id)}
-            >
-              <MessageSquare size={16} style={{ minWidth: '16px', opacity: activeChatId === chat.id ? 1 : 0.6 }} />
-              
-              {renamingId === chat.id ? (
-                <input
-                  className="rename-input"
-                  style={{ marginLeft: '4px' }}
-                  value={renameValue}
-                  onChange={(event) => onRenameValueChange(event.target.value)}
-                  onBlur={onSubmitRename}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') onSubmitRename();
-                    if (event.key === 'Escape') onCancelRename();
-                  }}
-                  autoFocus
-                  onClick={(event) => event.stopPropagation()}
-                />
-              ) : deletingId === chat.id ? (
-                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-                   <span style={{ fontSize: '0.78rem', color: 'var(--warning)', fontWeight: 600 }}>Delete?</span>
-                   <div style={{ display: 'flex', gap: '4px' }}>
-                     <button
-                       className="chat-action-btn"
-                       onClick={(event) => {
-                         event.stopPropagation();
-                         onDeleteChat(chat.id);
-                         setDeletingId(null);
-                       }}
-                       style={{ color: 'var(--error)' }}
-                       type="button"
-                     >
-                       <Check size={14} />
-                     </button>
-                     <button
-                       className="chat-action-btn"
-                       onClick={(event) => {
-                         event.stopPropagation();
-                         setDeletingId(null);
-                       }}
-                       type="button"
-                     >
-                       <X size={14} />
-                     </button>
-                   </div>
-                 </div>
-              ) : (
-                <>
-                  <span className="chat-item-title" title={chat.title}>
-                    {chat.title}
-                  </span>
-                  <div className="chat-item-actions">
-                    <button
-                      className="chat-action-btn"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onStartRename(chat);
-                      }}
-                      title="Rename"
-                      type="button"
-                    >
-                      <Edit2 size={13} />
-                    </button>
-                    <button
-                      className="chat-action-btn delete"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setDeletingId(chat.id);
-                      }}
-                      title="Delete"
-                      type="button"
-                    >
-                      <Trash2 size={13} />
-                    </button>
-                  </div>
-                </>
-              )}
+          {showFullSidebar && (
+            <div className="arithmo-chat-search">
+              <Search size={16} />
+              <input
+                type="text"
+                value={chatSearch}
+                onChange={(event) => setChatSearch(event.target.value)}
+                placeholder="Search chats"
+                aria-label="Search chats"
+              />
             </div>
-          ))}
-
-          {visibleChats.length === 0 && (
-            <p className="sidebar-empty">No chats found.</p>
           )}
 
-          {hasMore && (
-            <button className="load-more-btn" type="button" onClick={() => setLimit((value) => value + PAGE_SIZE)}>
-              Load more
-            </button>
+          {showFullSidebar && (
+            <section className="arithmo-sidebar-section chat-history">
+              <div className="arithmo-section-head">
+                <h3>Recent Chats</h3>
+                <button type="button" onClick={onToggleRecentChats}>{recentChatsExpanded ? 'See less' : 'See all'}</button>
+              </div>
+
+              <div className="arithmo-recent-list">
+                {recentChats.length > 0 ? (
+                  recentChats.map((chat) => (
+                    <div className={`arithmo-recent-row ${activeChatId === chat.id ? 'active' : ''}`} key={chat.id}>
+                      <button
+                        className="arithmo-recent-select"
+                        onClick={() => {
+                          onSelectChat?.(chat.id);
+                          if (isTablet && tabletOrientation === 'portrait') {
+                            onCloseSidebar?.();
+                          }
+                        }}
+                        type="button"
+                      >
+                        <MessageSquare size={14} />
+                        <span>{chat.title || 'Untitled chat'}</span>
+                        {showChatTimestamps !== false && <small>{formatChatTimestamp(chat)}</small>}
+                      </button>
+                      <button
+                        className="arithmo-recent-delete"
+                        type="button"
+                        aria-label={`Delete ${chat.title || 'chat'}`}
+                        onClick={() => onDeleteChat?.(chat.id)}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  ))
+                ) : (
+                  <div className="arithmo-empty-history">No recent chats</div>
+                )}
+              </div>
+            </section>
           )}
         </div>
 
-        <div className="sidebar-footer">
-          <div className="sidebar-user">
-            <div className="user-avatar" style={{ overflow: 'hidden' }}>
-              {user?.avatar ? <img src={user.avatar} alt="User" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : (user?.name || user?.email || '?')[0]?.toUpperCase()}
-            </div>
-            <div className="user-info">
-              <div className="user-name">{user?.name || 'Arithmo User'}</div>
-              <div className="user-email">{user?.email || 'user@arithmo.ai'}</div>
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
-            <button className="logout-btn" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }} type="button" onClick={onOpenSettings}>
-              <Settings size={14} /> Profile
+        <div className="arithmo-sidebar-footer">
+          {!isPremium && (
+            <button className="arithmo-sidebar-upgrade" type="button" onClick={onUpgradeClick}>
+              <span>Upgrade to Pro</span>
+              <small>Unlock Deep Mode and higher limits</small>
             </button>
-            <button className="logout-btn" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }} type="button" onClick={onLogout}>
-              <LogOut size={14} /> Sign Out
-            </button>
-          </div>
+          )}
+
+          {user?.isLifetime && (
+            <div className="arithmo-sidebar-plan lifetime">Lifetime access active</div>
+          )}
+          {!user?.isLifetime && user?.isPremium && (
+            <div className="arithmo-sidebar-plan pro">Pro access active</div>
+          )}
+
+          <button className="arithmo-settings-link" onClick={onOpenSettings} type="button">
+            <Settings size={18} /> Settings
+          </button>
+
+          <button className="arithmo-profile-row" onClick={onOpenSettings} type="button">
+            <span className="arithmo-profile-main">
+              <span className="arithmo-profile-avatar">
+                {user?.avatar ? (
+                  <img src={user.avatar} alt={user?.name || 'User'} />
+                ) : (
+                  userInitial
+                )}
+              </span>
+              <span className="arithmo-profile-text">
+                <strong>{user?.name || 'User'}</strong>
+                {showFullSidebar && <small>{user?.email || 'Free access'}</small>}
+              </span>
+            </span>
+            <ChevronDown size={14} />
+          </button>
         </div>
       </aside>
     </>

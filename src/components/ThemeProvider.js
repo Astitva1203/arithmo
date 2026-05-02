@@ -2,7 +2,11 @@
 
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 
-const ThemeContext = createContext({ theme: 'dark', toggleTheme: () => {} });
+const ThemeContext = createContext({
+  theme: 'dark',
+  toggleTheme: () => { },
+  setThemeMode: () => { },
+});
 
 export function useTheme() {
   return useContext(ThemeContext);
@@ -21,6 +25,13 @@ export default function ThemeProvider({ children }) {
     }
   }, []);
 
+  const setThemeMode = useCallback((nextTheme) => {
+    const normalized = nextTheme === 'light' ? 'light' : 'dark';
+    localStorage.setItem('arithmo_theme', normalized);
+    document.documentElement.setAttribute('data-theme', normalized);
+    setTheme(normalized);
+  }, []);
+
   const toggleTheme = useCallback(() => {
     setTheme((prev) => {
       const next = prev === 'dark' ? 'light' : 'dark';
@@ -31,7 +42,7 @@ export default function ThemeProvider({ children }) {
   }, []);
 
   return (
-    <ThemeContext.Provider value={{ theme, toggleTheme }}>
+    <ThemeContext.Provider value={{ theme, toggleTheme, setThemeMode }}>
       {children}
     </ThemeContext.Provider>
   );
