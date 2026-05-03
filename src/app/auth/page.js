@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Eye, EyeOff } from 'lucide-react';
+import { resilientFetch } from '@/lib/resilientFetch';
 
 export default function AuthPage() {
   const [isLogin, setIsLogin] = useState(true);
@@ -37,7 +38,7 @@ export default function AuthPage() {
         allowPasswordReset: !isLogin,
       };
 
-      const res = await fetch(endpoint, {
+      const res = await resilientFetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),

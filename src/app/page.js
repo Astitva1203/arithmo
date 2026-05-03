@@ -12,6 +12,7 @@ import TypingIndicator from '@/components/chat/TypingIndicator';
 import SettingsModal from '@/components/chat/SettingsModal';
 import BottomNav from '@/components/chat/BottomNav';
 import { triggerHaptic } from '@/lib/haptics';
+import { resilientFetch } from '@/lib/resilientFetch';
 
 function createId() {
   return `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -351,7 +352,7 @@ export default function HomePage() {
     writeLocalSettings(nextSettings);
 
     try {
-      const res = await fetch('/api/user/settings', {
+      const res = await resilientFetch('/api/user/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...profilePatch, settings: nextSettings }),
@@ -368,7 +369,7 @@ export default function HomePage() {
 
   const refreshBillingUsage = useCallback(async () => {
     try {
-      const res = await fetch('/api/billing/usage');
+      const res = await resilientFetch('/api/billing/usage');
       const data = await res.json().catch(() => null);
       if (!res.ok || !data) return null;
       setBillingUsage(data);
@@ -388,7 +389,7 @@ export default function HomePage() {
 
   // ===== Auth check =====
   useEffect(() => {
-    fetch('/api/auth/me')
+    resilientFetch('/api/auth/me')
       .then((r) => r.ok ? r.json() : null)
       .then((data) => {
         if (data?.user) {
@@ -453,16 +454,19 @@ export default function HomePage() {
     localStorage.setItem(PIN_STORAGE_KEY, JSON.stringify(pinnedByChat || {}));
   }, [pinnedByChat]);
 
-  // ===== Load chats =====
+  // ===== Load chats (staggered to avoid DDoS triggers) =====
   useEffect(() => {
     if (!user) return;
-    fetch('/api/chats')
+    // Load chats first, then billing after a short delay
+    resilientFetch('/api/chats')
       .then((r) => r.ok ? r.json() : null)
       .then((data) => {
         if (data?.chats) setChats(data.chats);
       })
       .catch(() => { });
-    refreshBillingUsage();
+    // Stagger the billing call to avoid burst requests
+    const billingTimer = setTimeout(() => refreshBillingUsage(), 500);
+    return () => clearTimeout(billingTimer);
   }, [user?.id, refreshBillingUsage]);
 
   // ===== Load chat messages =====
@@ -475,7 +479,7 @@ export default function HomePage() {
 
     const requestedChatId = activeChatId;
     setSelectedImage(null);
-    fetch(`/api/chats/${requestedChatId}`)
+    resilientFetch(`/api/chats/${requestedChatId}`)
       .then((r) => r.ok ? r.json() : null)
       .then((data) => {
         if (requestedChatId !== activeChatIdRef.current) return;
@@ -789,7 +793,7 @@ export default function HomePage() {
       setComposerMode('chat');
       setManualModeOverride(false);
       setChatMode(currentSettings.defaultChatMode || 'chat');
-      const res = await fetch('/api/chats', {
+      const res = await resilientFetch('/api/chats', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: 'New Chat' }),
@@ -927,7 +931,7 @@ export default function HomePage() {
     // Create a chat if none active
     if (!chatId) {
       try {
-        const res = await fetch('/api/chats', {
+        const res = await resilientFetch('/api/chats', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ title: 'New Chat' }),
@@ -1010,7 +1014,7 @@ export default function HomePage() {
         return { role: m.role, content: m.content };
       });
 
-      const res = await fetch('/api/chat', {
+      const res = await resilientFetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1116,7 +1120,7 @@ export default function HomePage() {
       refreshBillingUsage();
 
       // Refresh chat list to get auto-title
-      fetch('/api/chats')
+      resilientFetch('/api/chats')
         .then((r) => r.ok ? r.json() : null)
         .then((data) => { if (data?.chats) setChats(data.chats); })
         .catch(() => { });
@@ -1164,7 +1168,7 @@ export default function HomePage() {
     let chatId = activeChatId;
     if (!chatId) {
       try {
-        const res = await fetch('/api/chats', {
+        const res = await resilientFetch('/api/chats', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ title: 'New Chat' }),
@@ -1192,7 +1196,7 @@ export default function HomePage() {
     setInput('');
 
     try {
-      const res = await fetch('/api/chat', {
+      const res = await resilientFetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ generateImage: true, imagePrompt: prompt, chatId }),
@@ -1218,7 +1222,7 @@ export default function HomePage() {
         },
       ]);
 
-      fetch('/api/chats').then((r) => r.ok ? r.json() : null).then((d) => { if (d?.chats) setChats(d.chats); }).catch(() => { });
+      resilientFetch('/api/chats').then((r) => r.ok ? r.json() : null).then((d) => { if (d?.chats) setChats(d.chats); }).catch(() => { });
       refreshBillingUsage();
     } catch (err) {
       setError(err?.message || 'Image generation failed.');
@@ -1274,7 +1278,7 @@ export default function HomePage() {
     }
 
     try {
-      const res = await fetch(`/api/chats/${chatId}`, { method: 'DELETE' });
+      const res = await resilientFetch(`/api/chats/${chatId}`, { method: 'DELETE' });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'Failed to delete chat.');
       setChats((prev) => prev.filter((c) => c.id !== chatId));
@@ -1291,7 +1295,7 @@ export default function HomePage() {
 
   // ===== Logout =====
   const handleLogout = useCallback(async () => {
-    await fetch('/api/auth/logout', { method: 'POST' });
+    await resilientFetch('/api/auth/logout', { method: 'POST' });
     router.push('/auth');
   }, [router]);
 
