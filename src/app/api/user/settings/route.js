@@ -1,109 +1,75 @@
 import { NextResponse } from 'next/server';
-import { getDb } from '@/lib/mongodb';
-import { getAuthUser } from '@/lib/auth';
+import { getAuthUser, authErrorResponse, AuthError } from '@/lib/auth';
 import {
   buildUsagePayload,
-  ensureLifetimeAccess,
   getDailyUsage,
   serializeUserPlan,
 } from '@/lib/billing';
+import { normalizeSettings } from '@/lib/userDefaults';
 
-const DEFAULT_SETTINGS = {
-  defaultChatMode: 'chat',
-  responseMode: 'deep',
-  theme: 'dark',
-  showChatTimestamps: true,
-  sidebarCollapsed: false,
-  notificationsEnabled: true,
-  compactMessages: false,
-  minimalVisuals: true,
-};
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
-function normalizeSettings(input = {}) {
+function serializeUser(user, usage) {
   return {
-    defaultChatMode: ['chat', 'search', 'research'].includes(input.defaultChatMode)
-      ? input.defaultChatMode
-      : DEFAULT_SETTINGS.defaultChatMode,
-    responseMode: ['deep', 'speed'].includes(input.responseMode)
-      ? input.responseMode
-      : DEFAULT_SETTINGS.responseMode,
-    theme: ['light', 'dark'].includes(input.theme)
-      ? input.theme
-      : DEFAULT_SETTINGS.theme,
-    showChatTimestamps:
-      typeof input.showChatTimestamps === 'boolean'
-        ? input.showChatTimestamps
-        : DEFAULT_SETTINGS.showChatTimestamps,
-    sidebarCollapsed:
-      typeof input.sidebarCollapsed === 'boolean'
-        ? input.sidebarCollapsed
-        : DEFAULT_SETTINGS.sidebarCollapsed,
-    notificationsEnabled:
-      typeof input.notificationsEnabled === 'boolean'
-        ? input.notificationsEnabled
-        : DEFAULT_SETTINGS.notificationsEnabled,
-    compactMessages:
-      typeof input.compactMessages === 'boolean'
-        ? input.compactMessages
-        : DEFAULT_SETTINGS.compactMessages,
-    minimalVisuals:
-      typeof input.minimalVisuals === 'boolean'
-        ? input.minimalVisuals
-        : DEFAULT_SETTINGS.minimalVisuals,
+    id: user._id.toString(),
+    firebaseUid: user.firebaseUid,
+    email: user.email,
+    name: user.name || user.email?.split('@')[0] || 'User',
+    avatar: user.avatar || null,
+    settings: normalizeSettings(user.settings || {}),
+    ...serializeUserPlan(user),
+    usage: buildUsagePayload(user, usage),
   };
 }
 
 export async function POST(request) {
   try {
-    const auth = getAuthUser(request);
-    if (!auth) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const db = await getDb();
-    if (!db) {
-      return NextResponse.json({ error: 'Database not available' }, { status: 503 });
-    }
-
-    const body = await request.json();
-    const { name, avatar, settings } = body;
-
-    const { ObjectId } = await import('mongodb');
+    const auth = await getAuthUser(request);
+    const body = await request.json().catch(() => ({}));
+    const { name, avatar, settings } = body || {};
     const updateData = {};
-    if (typeof name === 'string' && name.trim()) updateData.name = name.trim().slice(0, 80);
-    if (avatar !== undefined) updateData.avatar = avatar;
-    if (settings && typeof settings === 'object') updateData.settings = normalizeSettings(settings);
+
+    if (typeof name === 'string' && name.trim()) {
+      updateData.name = name.trim().slice(0, 80);
+    }
+    if (avatar !== undefined) {
+      const avatarText = typeof avatar === 'string' ? avatar : null;
+      if (avatarText && avatarText.length > 1_000_000) {
+        return NextResponse.json({ error: 'Avatar image is too large.' }, { status: 400 });
+      }
+      updateData.avatar = avatarText;
+    }
+    if (settings && typeof settings === 'object') {
+      updateData.settings = normalizeSettings({
+        ...auth.mongoUser.settings,
+        defaultChatMode: settings.defaultChatMode,
+        responseMode: settings.responseMode,
+      });
+    }
 
     if (Object.keys(updateData).length === 0) {
-      return NextResponse.json({ error: 'No data to update' }, { status: 400 });
+      return NextResponse.json({ error: 'No data to update.' }, { status: 400 });
     }
 
+    const { getDb } = await import('@/lib/mongodb');
+    const { ObjectId } = await import('mongodb');
+    const db = await getDb();
     const result = await db.collection('users').findOneAndUpdate(
       { _id: ObjectId.createFromHexString(auth.userId) },
-      { $set: updateData },
-      { returnDocument: 'after' }
+      { $set: { ...updateData, updatedAt: new Date() } },
+      { returnDocument: 'after', projection: { password: 0 } }
     );
 
-    if (!result) {
-      return NextResponse.json({ error: 'User not found' }, { status: 404 });
-    }
-
-    const updatedUser = await ensureLifetimeAccess(db, result);
-    const usage = await getDailyUsage(db, updatedUser._id.toString());
+    const updatedUser = result?.value || result || { ...auth.mongoUser, ...updateData };
+    const usage = await getDailyUsage(null, updatedUser);
 
     return NextResponse.json({
-      user: {
-        id: updatedUser._id.toString(),
-        email: updatedUser.email,
-        name: updatedUser.name || updatedUser.email.split('@')[0],
-        avatar: updatedUser.avatar || null,
-        settings: normalizeSettings(updatedUser.settings || {}),
-        ...serializeUserPlan(updatedUser),
-        usage: buildUsagePayload(updatedUser, usage),
-      }
+      user: serializeUser(updatedUser, usage),
     });
   } catch (error) {
+    if (error instanceof AuthError) return authErrorResponse(error);
     console.error('Settings error:', error);
-    return NextResponse.json({ error: 'Failed to update settings' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to update settings.' }, { status: 500 });
   }
 }

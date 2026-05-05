@@ -1,8 +1,9 @@
-'use client';
+﻿'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTheme } from '@/components/ThemeProvider';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
 import ChatComposer from '@/components/chat/ChatComposer';
 import ChatHeader from '@/components/chat/ChatHeader';
 import ChatSidebar from '@/components/chat/ChatSidebar';
@@ -12,6 +13,7 @@ import TypingIndicator from '@/components/chat/TypingIndicator';
 import SettingsModal from '@/components/chat/SettingsModal';
 import BottomNav from '@/components/chat/BottomNav';
 import { triggerHaptic } from '@/lib/haptics';
+import { getFirebaseClientAuth } from '@/lib/firebaseClient';
 import { resilientFetch } from '@/lib/resilientFetch';
 
 function createId() {
@@ -185,7 +187,7 @@ function messageFingerprint(message) {
 
 function buildQuickTitle(text) {
   const cleaned = String(text || '')
-    .replace(/["'“”‘’]/g, '')
+    .replace(/["'\u201c\u201d\u2018\u2019]/g, '')
     .replace(/[:;.,!?/\\|[\]{}()<>-]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -389,9 +391,26 @@ export default function HomePage() {
 
   // ===== Auth check =====
   useEffect(() => {
-    resilientFetch('/api/auth/me')
-      .then((r) => r.ok ? r.json() : null)
-      .then((data) => {
+    let firebaseAuth;
+    try {
+      firebaseAuth = getFirebaseClientAuth();
+    } catch {
+      setAuthLoading(false);
+      router.push('/auth');
+      return undefined;
+    }
+
+    const unsubscribe = onAuthStateChanged(firebaseAuth, async (firebaseUser) => {
+      if (!firebaseUser) {
+        setAuthLoading(false);
+        router.push('/auth');
+        return;
+      }
+
+      try {
+        await firebaseUser.getIdToken(true);
+        const response = await resilientFetch('/api/auth/me');
+        const data = response.ok ? await response.json() : null;
         if (data?.user) {
           setUser(data.user);
           if (data.user.usage) setBillingUsage(data.user.usage);
@@ -401,9 +420,14 @@ export default function HomePage() {
         } else {
           router.push('/auth');
         }
-      })
-      .catch(() => router.push('/auth'))
-      .finally(() => setAuthLoading(false));
+      } catch {
+        router.push('/auth');
+      } finally {
+        setAuthLoading(false);
+      }
+    });
+
+    return () => unsubscribe();
   }, [router, applySettings]);
 
   useEffect(() => {
@@ -644,9 +668,9 @@ export default function HomePage() {
     }
   }, [deviceType, tabletOrientation]);
 
-  // ===== Swipe gestures for tablet sidebar =====
+  // ===== Swipe gestures for portrait sidebar =====
   useEffect(() => {
-    if (typeof window === 'undefined' || deviceType !== 'tablet') return;
+    if (typeof window === 'undefined' || !['mobile', 'tablet'].includes(deviceType)) return;
 
     let touchStartX = 0;
     let touchStartY = 0;
@@ -667,11 +691,11 @@ export default function HomePage() {
       // Only consider horizontal swipes (not vertical scrolling)
       if (deltaY > Math.abs(deltaX)) return;
 
-      // Swipe right from left edge → open sidebar
+      // Swipe right from left edge â†’ open sidebar
       if (deltaX > SWIPE_THRESHOLD && touchStartX < EDGE_ZONE) {
         setSidebarOpen(true);
       }
-      // Swipe left → close sidebar
+      // Swipe left â†’ close sidebar
       if (deltaX < -SWIPE_THRESHOLD) {
         setSidebarOpen(false);
       }
@@ -1295,7 +1319,11 @@ export default function HomePage() {
 
   // ===== Logout =====
   const handleLogout = useCallback(async () => {
-    await resilientFetch('/api/auth/logout', { method: 'POST' });
+    await signOut(getFirebaseClientAuth());
+    await resilientFetch('/api/auth/logout', { method: 'POST' }, { skipAuth: true }).catch(() => null);
+    setUser(null);
+    setMessages([]);
+    setActiveChatId(null);
     router.push('/auth');
   }, [router]);
 
@@ -1646,7 +1674,7 @@ export default function HomePage() {
             setActiveChatId(chatId);
             setMobileTab('chats');
             setError('');
-            if (deviceType === 'tablet' && tabletOrientation === 'portrait') {
+            if (deviceType === 'mobile' || (deviceType === 'tablet' && tabletOrientation === 'portrait')) {
               setSidebarOpen(false);
             }
           }}

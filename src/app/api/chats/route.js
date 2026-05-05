@@ -1,13 +1,10 @@
 import { NextResponse } from 'next/server';
 import { getDb } from '@/lib/mongodb';
-import { getAuthUser } from '@/lib/auth';
+import { getAuthUser, authErrorResponse, AuthError } from '@/lib/auth';
 
 export async function GET(request) {
   try {
-    const auth = getAuthUser(request);
-    if (!auth) {
-      return NextResponse.json({ error: 'Not authenticated.' }, { status: 401 });
-    }
+    const auth = await getAuthUser(request);
 
     const db = await getDb();
     if (!db) {
@@ -30,6 +27,7 @@ export async function GET(request) {
       })),
     });
   } catch (error) {
+    if (error instanceof AuthError) return authErrorResponse(error);
     console.error('List chats error:', error);
     return NextResponse.json({ error: 'Failed to load chats.' }, { status: 500 });
   }
@@ -37,10 +35,7 @@ export async function GET(request) {
 
 export async function POST(request) {
   try {
-    const auth = getAuthUser(request);
-    if (!auth) {
-      return NextResponse.json({ error: 'Not authenticated.' }, { status: 401 });
-    }
+    const auth = await getAuthUser(request);
 
     const body = await request.json().catch(() => ({}));
     const title = String(body.title || 'New Chat').trim().slice(0, 100);
@@ -72,6 +67,7 @@ export async function POST(request) {
       },
     });
   } catch (error) {
+    if (error instanceof AuthError) return authErrorResponse(error);
     console.error('Create chat error:', error);
     return NextResponse.json({ error: 'Failed to create chat.' }, { status: 500 });
   }

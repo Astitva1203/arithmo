@@ -1,17 +1,19 @@
 import { NextResponse } from 'next/server';
-import { getAuthUser } from '@/lib/auth';
+import { getAuthUser, authErrorResponse, AuthError } from '@/lib/auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function POST(request) {
-  const auth = getAuthUser(request);
-  if (!auth) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  try {
+    await getAuthUser(request);
 
-  return NextResponse.json({
-    available: false,
-    message: 'Payments are currently disabled. Arithmo Pro will be available soon.',
-  });
+    return NextResponse.json({
+      available: false,
+      message: 'Payments are currently disabled. Arithmo Pro will be available soon.',
+    });
+  } catch (error) {
+    if (error instanceof AuthError) return authErrorResponse(error);
+    return NextResponse.json({ error: 'Checkout is temporarily unavailable.' }, { status: 500 });
+  }
 }

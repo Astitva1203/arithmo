@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { Check, Sparkles, X } from 'lucide-react';
+import { resilientFetch } from '@/lib/resilientFetch';
 
 const FEATURES = [
   ['Chat messages', '50/day', 'Unlimited'],
@@ -27,7 +28,7 @@ export default function PricingPage() {
 
   const handleUpgrade = async () => {
     try {
-      const res = await fetch('/api/billing/checkout', { method: 'POST' });
+      const res = await resilientFetch('/api/billing/checkout', { method: 'POST' });
       const data = await res.json().catch(() => ({}));
       setMessage(data.message || 'Payments are currently not available. We are working on enabling subscriptions soon. Thank you for your patience.');
     } catch {

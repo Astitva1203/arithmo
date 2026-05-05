@@ -7,7 +7,7 @@ const DEFAULT_OPTIONS = {
   maxRetries: 3,
   baseDelayMs: 800,
   maxDelayMs: 8000,
-  retryOnStatuses: [403, 429, 502, 503, 504],
+  retryOnStatuses: [429, 502, 503, 504],
 };
 
 /**
@@ -35,10 +35,11 @@ function sleep(ms) {
 export async function resilientFetch(url, fetchOptions = {}, retryOptions = {}) {
   const opts = { ...DEFAULT_OPTIONS, ...retryOptions };
   let lastError = null;
+  const optionsWithAuth = await withFirebaseAuth(url, fetchOptions, retryOptions);
 
   for (let attempt = 0; attempt <= opts.maxRetries; attempt++) {
     try {
-      const response = await fetch(url, fetchOptions);
+      const response = await fetch(url, optionsWithAuth);
 
       // If the response is OK or it's a status we shouldn't retry, return it
       if (response.ok || !opts.retryOnStatuses.includes(response.status)) {
@@ -60,7 +61,7 @@ export async function resilientFetch(url, fetchOptions = {}, retryOptions = {}) 
       lastError = err;
 
       // Don't retry on abort
-      if (err?.name === 'AbortError' || fetchOptions?.signal?.aborted) {
+      if (err?.name === 'AbortError' || optionsWithAuth?.signal?.aborted) {
         throw err;
       }
 
@@ -80,6 +81,30 @@ export async function resilientFetch(url, fetchOptions = {}, retryOptions = {}) 
   // Should not reach here, but just in case
   if (lastError) throw lastError;
   throw new Error('resilientFetch: unexpected end of retry loop');
+}
+
+async function withFirebaseAuth(url, fetchOptions = {}, retryOptions = {}) {
+  if (retryOptions.skipAuth || typeof window === 'undefined') return fetchOptions;
+  const urlText = typeof url === 'string' ? url : String(url || '');
+  const isProtectedApi = urlText.startsWith('/api/') || urlText.includes('/api/');
+  if (!isProtectedApi) return fetchOptions;
+
+  try {
+    const { getFirebaseClientAuth } = await import('@/lib/firebaseClient');
+    const firebaseAuth = getFirebaseClientAuth();
+    const token = await firebaseAuth.currentUser?.getIdToken();
+    if (!token) return fetchOptions;
+
+    return {
+      ...fetchOptions,
+      headers: {
+        ...(fetchOptions.headers || {}),
+        Authorization: `Bearer ${token}`,
+      },
+    };
+  } catch {
+    return fetchOptions;
+  }
 }
 
 /**

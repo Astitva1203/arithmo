@@ -113,16 +113,26 @@ export function emptyUsage(dateKey = utcDayKey()) {
   };
 }
 
-export async function getDailyUsage(db, userId, dateKey = utcDayKey()) {
-  if (!db || !userId) return emptyUsage(dateKey);
+export async function getDailyUsage(db, userOrId, dateKey = utcDayKey()) {
+  if (!userOrId) return emptyUsage(dateKey);
 
-  const key = `${userId}:${dateKey}`;
-  const legacyKey = `${userId}_${dateKey}`;
-  const doc =
-    (await db.collection('usage').findOne({ _id: key })) ||
-    (await db.collection('usage').findOne({ _id: legacyKey })) ||
-    {};
+  let user = typeof userOrId === 'object' ? userOrId : null;
 
+  if (!user && db && typeof userOrId === 'string') {
+    try {
+      const { ObjectId } = await import('mongodb');
+      if (ObjectId.isValid(userOrId)) {
+        user = await db.collection('users').findOne(
+          { _id: ObjectId.createFromHexString(userOrId) },
+          { projection: { usage: 1, lastReset: 1 } }
+        );
+      }
+    } catch {
+      user = null;
+    }
+  }
+
+  const doc = user?.lastReset === dateKey ? user.usage || {} : {};
   return {
     dateKey,
     chat: toCount(doc.chat),
@@ -196,7 +206,7 @@ export function getEffectiveProvider(user, requestedProvider) {
 export async function incrementUsageOrThrow(db, { user, userId, units }) {
   const planInfo = normalizePlan(user);
   const dateKey = utcDayKey();
-  const usage = await getDailyUsage(db, userId, dateKey);
+  const usage = await getDailyUsage(db, user, dateKey);
 
   if (planInfo.isPremium) {
     return buildUsagePayload(user, usage);
@@ -232,27 +242,79 @@ export async function incrementUsageOrThrow(db, { user, userId, units }) {
 
   const increments = {};
   for (const [feature, amount] of Object.entries(normalizedUnits)) {
-    if (amount > 0) increments[feature] = amount;
+    if (amount > 0) increments[`usage.${feature}`] = amount;
   }
 
   if (Object.keys(increments).length > 0) {
-    await db.collection('usage').updateOne(
-      { _id: `${userId}:${dateKey}` },
+    const { ObjectId } = await import('mongodb');
+    await db.collection('users').updateOne(
+      { _id: ObjectId.createFromHexString(userId) },
       {
         $inc: increments,
-        $set: { updatedAt: new Date(), userId, dateKey },
-        $setOnInsert: { createdAt: new Date() },
-      },
-      { upsert: true }
+        $set: { updatedAt: new Date(), lastReset: dateKey },
+        $setOnInsert: { usage: emptyUsage(dateKey) },
+      }
     );
+
+    await db.collection('usageEvents').insertOne({
+      userId,
+      dateKey,
+      units: normalizedUnits,
+      createdAt: new Date(),
+    }).catch(() => null);
   }
 
   const nextUsage = { ...usage };
-  for (const [feature, amount] of Object.entries(increments)) {
+  for (const [featurePath, amount] of Object.entries(increments)) {
+    const feature = featurePath.replace('usage.', '');
     nextUsage[feature] = toCount(nextUsage[feature]) + amount;
   }
 
   return buildUsagePayload(user, nextUsage);
+}
+
+export async function resetUsageIfNeeded(db, user) {
+  if (!db || !user?._id) return user;
+  const dateKey = utcDayKey();
+  if (user.lastReset === dateKey) return user;
+
+  const usage = { chat: 0, search: 0, research: 0, images: 0 };
+  await db.collection('users').updateOne(
+    { _id: user._id },
+    {
+      $set: {
+        usage,
+        lastReset: dateKey,
+        updatedAt: new Date(),
+      },
+    }
+  );
+
+  return { ...user, usage, lastReset: dateKey };
+}
+
+export async function logSecurityEvent(db, event = {}) {
+  if (!db) return;
+  await db.collection('securityLogs').insertOne({
+    type: event.type || 'event',
+    userId: event.userId || null,
+    email: event.email || null,
+    status: event.status || null,
+    message: String(event.message || '').slice(0, 300),
+    createdAt: new Date(),
+  }).catch(() => null);
+}
+
+export async function logRateLimitHit(db, event = {}) {
+  if (!db) return;
+  await db.collection('securityLogs').insertOne({
+    type: 'rate_limit',
+    userId: event.userId || null,
+    email: event.email || null,
+    feature: event.feature || null,
+    message: String(event.message || 'Daily limit reached.').slice(0, 300),
+    createdAt: new Date(),
+  }).catch(() => null);
 }
 
 export function accessErrorPayload(error, usage = null) {

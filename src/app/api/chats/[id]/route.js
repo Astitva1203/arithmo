@@ -1,13 +1,10 @@
 import { NextResponse } from 'next/server';
 import { getDb } from '@/lib/mongodb';
-import { getAuthUser } from '@/lib/auth';
+import { getAuthUser, authErrorResponse, AuthError } from '@/lib/auth';
 
 export async function GET(request, { params }) {
   try {
-    const auth = getAuthUser(request);
-    if (!auth) {
-      return NextResponse.json({ error: 'Not authenticated.' }, { status: 401 });
-    }
+    const auth = await getAuthUser(request);
 
     const { id } = await params;
 
@@ -54,6 +51,7 @@ export async function GET(request, { params }) {
       })),
     });
   } catch (error) {
+    if (error instanceof AuthError) return authErrorResponse(error);
     console.error('Get chat error:', error);
     return NextResponse.json({ error: 'Failed to load chat.' }, { status: 500 });
   }
@@ -61,10 +59,7 @@ export async function GET(request, { params }) {
 
 export async function PATCH(request, { params }) {
   try {
-    const auth = getAuthUser(request);
-    if (!auth) {
-      return NextResponse.json({ error: 'Not authenticated.' }, { status: 401 });
-    }
+    const auth = await getAuthUser(request);
 
     const { id } = await params;
     const body = await request.json().catch(() => null);
@@ -94,6 +89,7 @@ export async function PATCH(request, { params }) {
 
     return NextResponse.json({ success: true, title });
   } catch (error) {
+    if (error instanceof AuthError) return authErrorResponse(error);
     console.error('Rename chat error:', error);
     return NextResponse.json({ error: 'Failed to rename chat.' }, { status: 500 });
   }
@@ -101,10 +97,7 @@ export async function PATCH(request, { params }) {
 
 export async function DELETE(request, { params }) {
   try {
-    const auth = getAuthUser(request);
-    if (!auth) {
-      return NextResponse.json({ error: 'Not authenticated.' }, { status: 401 });
-    }
+    const auth = await getAuthUser(request);
 
     const { id } = await params;
 
@@ -127,6 +120,7 @@ export async function DELETE(request, { params }) {
 
     return NextResponse.json({ success: true });
   } catch (error) {
+    if (error instanceof AuthError) return authErrorResponse(error);
     console.error('Delete chat error:', error);
     return NextResponse.json({ error: 'Failed to delete chat.' }, { status: 500 });
   }

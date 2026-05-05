@@ -1,6 +1,6 @@
 'use client';
 
-import { Bell, ChevronLeft, ChevronRight, Menu, PanelLeftClose, PanelLeftOpen, Plus } from 'lucide-react';
+import { Bell, Plus } from 'lucide-react';
 
 function modelModeLabel(value) {
   const normalized = String(value || 'auto').toLowerCase();
@@ -28,8 +28,6 @@ export default function ChatHeader({
   onUpgradeClick,
 }) {
   const isDesktop = deviceType === 'desktop';
-  const isMobile = deviceType === 'mobile';
-  const isTablet = deviceType === 'tablet';
   const initial = (user?.name || user?.email || 'A')[0]?.toUpperCase();
   const isPremium = Boolean(user?.isPremium || user?.isLifetime);
 
@@ -79,27 +77,15 @@ export default function ChatHeader({
     <header className="arithmo-mobile-header">
       <div className="arithmo-mobile-header-top">
         <div className="arithmo-mobile-header-left">
-          {isMobile && (
-            <button className="mobile-menu-btn" onClick={onOpenSidebar} type="button" aria-label="Open sidebar">
-              <Menu size={24} />
-            </button>
-          )}
-
-          {isTablet && (
-            <button
-              className={`tablet-sidebar-toggle ${sidebarOpen ? 'is-open' : ''}`}
-              onClick={onToggleSidebar}
-              type="button"
-              aria-label={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
-            >
-              {sidebarOpen ? <PanelLeftClose size={20} /> : <PanelLeftOpen size={20} />}
-            </button>
-          )}
-
-          <div className="arithmo-mobile-brand">
+          <button
+            className={`arithmo-mobile-brand sidebar-logo-toggle ${sidebarOpen ? 'active' : ''}`}
+            onClick={onToggleSidebar || onOpenSidebar}
+            type="button"
+            aria-label={sidebarOpen ? 'Close chat history' : 'Open chat history'}
+          >
             <img src="/logo.png" alt="Arithmo Logo" />
             <span>Arithmo</span>
-          </div>
+          </button>
         </div>
 
         <div className="arithmo-mobile-header-actions">

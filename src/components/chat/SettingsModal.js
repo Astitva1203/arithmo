@@ -1,81 +1,35 @@
 'use client';
 
-import { useState, useRef } from 'react';
-import { Camera, Check, Loader2, LogOut, Moon, Sun, X } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { Camera, Check, Loader2, LogOut, X } from 'lucide-react';
+import { resilientFetch } from '@/lib/resilientFetch';
 
-function PreferenceToggle({ label, description, enabled, onChange }) {
-  return (
-    <button
-      type="button"
-      onClick={onChange}
-      style={{
-        width: '100%',
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        gap: 12,
-        border: '1px solid var(--border-glass)',
-        background: 'var(--bg-glass-input)',
-        borderRadius: 10,
-        padding: '10px 12px',
-        color: 'var(--text-primary)',
-        cursor: 'pointer',
-      }}
-    >
-      <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
-        <strong style={{ fontSize: '0.84rem', fontWeight: 600 }}>{label}</strong>
-        <small style={{ color: 'var(--text-muted)', fontSize: '0.72rem' }}>{description}</small>
-      </span>
-      <span
-        aria-hidden="true"
-        style={{
-          width: 38,
-          height: 22,
-          borderRadius: 999,
-          position: 'relative',
-          background: enabled ? 'rgba(59, 130, 246, 0.35)' : 'rgba(148, 163, 184, 0.24)',
-          border: '1px solid rgba(148, 163, 184, 0.35)',
-          transition: 'background 150ms ease',
-        }}
-      >
-        <span
-          style={{
-            position: 'absolute',
-            top: 2,
-            left: enabled ? 18 : 2,
-            width: 16,
-            height: 16,
-            borderRadius: '50%',
-            background: enabled ? '#60a5fa' : '#94a3b8',
-            transition: 'left 150ms ease',
-          }}
-        />
-      </span>
-    </button>
-  );
+function planLabel(user) {
+  if (user?.isLifetime) return 'Lifetime';
+  if (user?.isPremium) return 'Pro';
+  return 'Free';
+}
+
+function fieldStyle() {
+  return {
+    width: '100%',
+    borderRadius: 10,
+    border: '1px solid var(--border-glass)',
+    background: 'var(--bg-glass-input)',
+    color: 'var(--text-primary)',
+    padding: '10px 12px',
+    boxSizing: 'border-box',
+  };
 }
 
 export default function SettingsModal({
   user,
   onClose,
   onUpdateUser,
-  theme,
-  onToggleTheme,
-  onSetThemeMode,
   chatMode,
   onChatModeChange,
   responseMode,
   onResponseModeChange,
-  showChatTimestamps,
-  onToggleChatTimestamps,
-  sidebarCollapsed,
-  onToggleSidebarCollapsed,
-  notificationsEnabled,
-  onToggleNotifications,
-  compactMessages,
-  onToggleCompactMessages,
-  minimalVisuals,
-  onToggleMinimalVisuals,
   settings,
   onLogout,
 }) {
@@ -86,46 +40,38 @@ export default function SettingsModal({
   const [success, setSuccess] = useState('');
   const fileInputRef = useRef(null);
 
-  const handleImageChange = (e) => {
-    const file = e.target.files?.[0];
+  const handleImageChange = (event) => {
+    const file = event.target.files?.[0];
     if (!file) return;
 
     if (file.size > 5 * 1024 * 1024) {
-      setError('Image must be under 5MB');
+      setError('Image must be under 5MB.');
       return;
     }
 
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = (readerEvent) => {
       const img = new Image();
       img.onload = () => {
         const canvas = document.createElement('canvas');
-        const MAX_SIZE = 200;
-        let width = img.width;
-        let height = img.height;
+        const maxSize = 200;
+        let { width, height } = img;
 
-        if (width > height) {
-          if (width > MAX_SIZE) {
-            height *= MAX_SIZE / width;
-            width = MAX_SIZE;
-          }
-        } else {
-          if (height > MAX_SIZE) {
-            width *= MAX_SIZE / height;
-            height = MAX_SIZE;
-          }
+        if (width > height && width > maxSize) {
+          height *= maxSize / width;
+          width = maxSize;
+        } else if (height > maxSize) {
+          width *= maxSize / height;
+          height = maxSize;
         }
 
         canvas.width = width;
         canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, width, height);
-
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-        setAvatarSrc(dataUrl);
+        canvas.getContext('2d')?.drawImage(img, 0, 0, width, height);
+        setAvatarSrc(canvas.toDataURL('image/jpeg', 0.85));
         setError('');
       };
-      img.src = event.target.result;
+      img.src = readerEvent.target.result;
     };
     reader.readAsDataURL(file);
   };
@@ -136,7 +82,7 @@ export default function SettingsModal({
     setSuccess('');
 
     try {
-      const res = await fetch('/api/user/settings', {
+      const res = await resilientFetch('/api/user/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -146,223 +92,165 @@ export default function SettingsModal({
             ...settings,
             defaultChatMode: chatMode,
             responseMode,
-            theme,
-            showChatTimestamps: showChatTimestamps !== false,
-            sidebarCollapsed: Boolean(sidebarCollapsed),
-            notificationsEnabled: notificationsEnabled !== false,
-            compactMessages: Boolean(compactMessages),
-            minimalVisuals: minimalVisuals !== false,
           },
-        })
+        }),
       });
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to save settings');
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Failed to save settings.');
 
-      setSuccess('Profile updated successfully.');
-      onUpdateUser(data.user);
-
+      setSuccess('Settings saved.');
+      onUpdateUser?.(data.user);
     } catch (err) {
-      setError(err.message);
+      setError(err.message || 'Failed to save settings.');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="modal-overlay" onClick={onClose} style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}>
-      <div className="modal-content" onClick={e => e.stopPropagation()} style={{ background: 'var(--bg-glass)', border: '1px solid var(--border-glass)', borderRadius: '16px', padding: '24px', width: '90%', maxWidth: '460px', boxShadow: '0 20px 40px rgba(0,0,0,0.4)', position: 'relative', maxHeight: '88vh', overflowY: 'auto' }}>
-        <button onClick={onClose} style={{ position: 'absolute', right: '16px', top: '16px', background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
+    <div
+      className="modal-overlay"
+      onClick={onClose}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        backgroundColor: 'rgba(0,0,0,0.62)',
+        zIndex: 1000,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backdropFilter: 'blur(6px)',
+      }}
+    >
+      <div
+        className="modal-content"
+        onClick={(event) => event.stopPropagation()}
+        style={{
+          background: 'var(--bg-glass)',
+          border: '1px solid var(--border-glass)',
+          borderRadius: 18,
+          padding: 24,
+          width: '90%',
+          maxWidth: 460,
+          boxShadow: '0 24px 60px rgba(0,0,0,0.42)',
+          position: 'relative',
+          maxHeight: '88vh',
+          overflowY: 'auto',
+        }}
+      >
+        <button
+          onClick={onClose}
+          type="button"
+          aria-label="Close settings"
+          style={{ position: 'absolute', right: 16, top: 16, background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
+        >
           <X size={20} />
         </button>
 
-        <h2 style={{ marginTop: 0, marginBottom: '20px', fontSize: '1.25rem', fontWeight: 600, color: 'var(--text-primary)' }}>Settings</h2>
+        <h2 style={{ marginTop: 0, marginBottom: 18, fontSize: '1.25rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+          Settings
+        </h2>
 
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px', marginBottom: '20px' }}>
-          <div style={{ position: 'relative' }}>
-            <div
-              style={{ width: '80px', height: '80px', borderRadius: '50%', background: 'var(--gradient-accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2rem', color: 'white', overflow: 'hidden', border: '2px solid var(--border-glass-strong)' }}
-            >
-              {avatarSrc ? (
-                <img src={avatarSrc} alt="Profile" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-              ) : (
-                (user?.name || user?.email || 'U')[0]?.toUpperCase()
-              )}
-            </div>
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              style={{ position: 'absolute', bottom: '-4px', right: '-4px', background: 'var(--bg-glass-input)', border: '1px solid var(--border-glass-strong)', borderRadius: '50%', width: '30px', height: '30px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'var(--text-primary)', boxShadow: '0 2px 8px rgba(0,0,0,0.3)' }}
-              title="Change avatar"
-            >
-              <Camera size={14} />
-            </button>
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={handleImageChange}
-              accept="image/png,image/jpeg,image/webp"
-              hidden
-            />
-          </div>
-          <div style={{ width: '100%' }}>
-            <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '8px' }}>Name</label>
-            <input
-              type="text"
-              value={name}
-              onChange={e => setName(e.target.value)}
-              className="chat-search"
-              style={{ width: '100%', padding: '10px 14px', boxSizing: 'border-box' }}
-              placeholder="Your name"
-            />
-          </div>
-        </div>
-
-        <div style={{ borderTop: '1px solid var(--border-glass)', paddingTop: '14px', marginBottom: '16px' }}>
-          <h3 style={{ margin: '0 0 10px', fontSize: '0.93rem', color: 'var(--text-primary)' }}>Customization</h3>
-
-          <div style={{ display: 'grid', gap: 10 }}>
-            <div style={{ border: '1px solid var(--border-glass)', borderRadius: 10, padding: 10, background: 'var(--bg-glass-input)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                {theme === 'dark' ? <Moon size={15} /> : <Sun size={15} />}
-                <strong style={{ fontSize: '0.84rem' }}>Theme Mode</strong>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                <button
-                  type="button"
-                  onClick={() => onSetThemeMode?.('light')}
-                  style={{
-                    border: '1px solid var(--border-glass)',
-                    background: theme === 'light' ? 'rgba(59,130,246,0.2)' : 'transparent',
-                    color: 'var(--text-primary)',
-                    borderRadius: 8,
-                    padding: '8px 10px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  Light
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onSetThemeMode?.('dark')}
-                  style={{
-                    border: '1px solid var(--border-glass)',
-                    background: theme === 'dark' ? 'rgba(59,130,246,0.2)' : 'transparent',
-                    color: 'var(--text-primary)',
-                    borderRadius: 8,
-                    padding: '8px 10px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  Dark
-                </button>
-              </div>
-              <button
-                type="button"
-                onClick={onToggleTheme}
+        <section style={{ display: 'grid', gap: 14, marginBottom: 18 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            <div style={{ position: 'relative' }}>
+              <div
                 style={{
-                  marginTop: 8,
-                  width: '100%',
-                  border: '1px solid var(--border-glass)',
-                  borderRadius: 8,
-                  padding: '8px 10px',
-                  background: 'transparent',
-                  color: 'var(--text-secondary)',
-                  cursor: 'pointer',
+                  width: 72,
+                  height: 72,
+                  borderRadius: '50%',
+                  background: 'var(--gradient-accent)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '1.8rem',
+                  color: 'white',
+                  overflow: 'hidden',
+                  border: '2px solid var(--border-glass-strong)',
                 }}
               >
-                Quick Toggle Theme
+                {avatarSrc ? <img src={avatarSrc} alt="Profile" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : (user?.name || user?.email || 'U')[0]?.toUpperCase()}
+              </div>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                type="button"
+                style={{ position: 'absolute', bottom: -4, right: -4, background: 'var(--bg-glass-input)', border: '1px solid var(--border-glass-strong)', borderRadius: '50%', width: 30, height: 30, display: 'grid', placeItems: 'center', cursor: 'pointer', color: 'var(--text-primary)' }}
+                title="Change avatar"
+              >
+                <Camera size={14} />
               </button>
+              <input ref={fileInputRef} type="file" accept="image/png,image/jpeg,image/webp" onChange={handleImageChange} hidden />
             </div>
 
-            <div style={{ border: '1px solid var(--border-glass)', borderRadius: 10, padding: 10, background: 'var(--bg-glass-input)' }}>
-              <label style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: 6 }}>Default Chat Mode</label>
-              <select
-                value={chatMode}
-                onChange={(event) => onChatModeChange?.(event.target.value)}
-                style={{ width: '100%', borderRadius: 8, border: '1px solid var(--border-glass)', background: 'var(--bg-glass)', color: 'var(--text-primary)', padding: '8px 10px' }}
-              >
-                <option value="chat">Chat</option>
-                <option value="search">Search</option>
-                <option value="research">Research</option>
-              </select>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <label style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: 6 }}>Name</label>
+              <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" style={fieldStyle()} />
             </div>
-
-            <div style={{ border: '1px solid var(--border-glass)', borderRadius: 10, padding: 10, background: 'var(--bg-glass-input)' }}>
-              <label style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: 6 }}>Response Style</label>
-              <select
-                value={responseMode}
-                onChange={(event) => onResponseModeChange?.(event.target.value)}
-                style={{ width: '100%', borderRadius: 8, border: '1px solid var(--border-glass)', background: 'var(--bg-glass)', color: 'var(--text-primary)', padding: '8px 10px' }}
-              >
-                <option value="deep">Deep</option>
-                <option value="speed">Speed</option>
-              </select>
-            </div>
-
-            <PreferenceToggle
-              label="Show Chat Timestamps"
-              description="Display time labels in recent chats sections."
-              enabled={showChatTimestamps !== false}
-              onChange={onToggleChatTimestamps}
-            />
-
-            <PreferenceToggle
-              label="Collapsed Sidebar by Default"
-              description="Start desktop layout with compact sidebar."
-              enabled={Boolean(sidebarCollapsed)}
-              onChange={onToggleSidebarCollapsed}
-            />
-
-            <PreferenceToggle
-              label="In-App Notices"
-              description="Show product and account notice banners."
-              enabled={notificationsEnabled !== false}
-              onChange={onToggleNotifications}
-            />
-
-            <PreferenceToggle
-              label="Compact Chat Bubbles"
-              description="Use tighter spacing for longer conversations."
-              enabled={Boolean(compactMessages)}
-              onChange={onToggleCompactMessages}
-            />
-
-            <PreferenceToggle
-              label="Minimal Visual Style"
-              description="Reduce bright gradients and keep the chat surface calm."
-              enabled={minimalVisuals !== false}
-              onChange={onToggleMinimalVisuals}
-            />
           </div>
-        </div>
+        </section>
 
-        {error && <div style={{ color: 'var(--error)', fontSize: '0.85rem', marginBottom: '16px', padding: '8px', background: 'rgba(239,68,68,0.1)', borderRadius: '8px' }}>{error}</div>}
-        {success && <div style={{ color: 'var(--success)', fontSize: '0.85rem', marginBottom: '16px', padding: '8px', background: 'rgba(34,197,94,0.1)', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}><Check size={14} /> {success}</div>}
+        <section style={{ borderTop: '1px solid var(--border-glass)', paddingTop: 16, display: 'grid', gap: 12 }}>
+          <div style={{ border: '1px solid var(--border-glass)', borderRadius: 12, padding: 12, background: 'var(--bg-glass-input)' }}>
+            <small style={{ display: 'block', color: 'var(--text-muted)', marginBottom: 4 }}>User Email</small>
+            <strong style={{ color: 'var(--text-primary)', wordBreak: 'break-word' }}>{user?.email || 'Not available'}</strong>
+          </div>
 
-        <div style={{ display: 'grid', gap: 10 }}>
+          <div style={{ border: '1px solid var(--border-glass)', borderRadius: 12, padding: 12, background: 'var(--bg-glass-input)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+            <span>
+              <small style={{ display: 'block', color: 'var(--text-muted)', marginBottom: 4 }}>Plan Status</small>
+              <strong style={{ color: 'var(--text-primary)' }}>{planLabel(user)}</strong>
+            </span>
+            <span className={`arithmo-plan-badge ${user?.isLifetime ? 'lifetime' : user?.isPremium ? 'pro' : ''}`}>
+              {planLabel(user)}
+            </span>
+          </div>
+
+          <div style={{ border: '1px solid var(--border-glass)', borderRadius: 12, padding: 12, background: 'var(--bg-glass-input)' }}>
+            <label style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: 6 }}>Default Chat Mode</label>
+            <select value={chatMode} onChange={(event) => onChatModeChange?.(event.target.value)} style={fieldStyle()}>
+              <option value="chat">Chat</option>
+              <option value="search">Search</option>
+              <option value="research">Research</option>
+            </select>
+          </div>
+
+          <div style={{ border: '1px solid var(--border-glass)', borderRadius: 12, padding: 12, background: 'var(--bg-glass-input)' }}>
+            <label style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: 6 }}>Response Style</label>
+            <select value={responseMode} onChange={(event) => onResponseModeChange?.(event.target.value)} style={fieldStyle()}>
+              <option value="deep">Deep</option>
+              <option value="speed">Speed</option>
+            </select>
+          </div>
+        </section>
+
+        {error && <div style={{ color: '#fecaca', fontSize: '0.86rem', marginTop: 14, padding: 10, background: 'rgba(239,68,68,0.16)', border: '1px solid rgba(239,68,68,0.35)', borderRadius: 10 }}>{error}</div>}
+        {success && <div style={{ color: '#bbf7d0', fontSize: '0.86rem', marginTop: 14, padding: 10, background: 'rgba(34,197,94,0.14)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 10, display: 'flex', alignItems: 'center', gap: 6 }}><Check size={14} /> {success}</div>}
+
+        <div style={{ display: 'grid', gap: 10, marginTop: 18 }}>
           <button
             onClick={onLogout}
             type="button"
             style={{
-              padding: '9px 12px',
+              padding: '10px 12px',
               border: '1px solid rgba(239,68,68,0.35)',
               background: 'rgba(239,68,68,0.12)',
               color: '#fca5a5',
               cursor: 'pointer',
-              borderRadius: 8,
+              borderRadius: 10,
               display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
               gap: 8,
-              fontWeight: 600,
+              fontWeight: 700,
             }}
           >
-            <LogOut size={14} /> Sign Out
+            <LogOut size={14} /> Logout
           </button>
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
-            <button onClick={onClose} style={{ padding: '8px 16px', background: 'transparent', border: 'none', color: 'var(--text-primary)', cursor: 'pointer', borderRadius: '8px' }}>Close</button>
-            <button onClick={handleSaveProfile} disabled={loading} style={{ padding: '8px 16px', background: 'var(--gradient-accent)', border: 'none', color: 'white', cursor: 'pointer', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 500 }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12 }}>
+            <button onClick={onClose} type="button" style={{ padding: '9px 16px', background: 'transparent', border: '1px solid var(--border-glass)', color: 'var(--text-primary)', cursor: 'pointer', borderRadius: 10 }}>Close</button>
+            <button onClick={handleSaveProfile} type="button" disabled={loading} style={{ padding: '9px 16px', background: 'var(--gradient-accent)', border: 'none', color: 'white', cursor: 'pointer', borderRadius: 10, display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700 }}>
               {loading ? <Loader2 size={16} className="spin" /> : 'Save Changes'}
             </button>
           </div>

@@ -1,14 +1,14 @@
 import { NextResponse } from 'next/server';
 import { getDb } from '@/lib/mongodb';
-import { getAuthUser } from '@/lib/auth';
+import { getAuthUser, authErrorResponse, AuthError } from '@/lib/auth';
 import {
   AccessError,
   accessErrorPayload,
   assertPremiumFeature,
-  ensureLifetimeAccess,
   getEffectiveModelMode,
   getEffectiveProvider,
   incrementUsageOrThrow,
+  logRateLimitHit,
 } from '@/lib/billing';
 import { AiRouterError, routeChatRequest } from '@/router/aiRouter';
 import { isGroqConfigured, requestGroqChatCompletion } from '@/services/ai/groqService';
@@ -79,7 +79,7 @@ Rules:
 - Output only the improved title`;
 
 const MAX_MESSAGES = Number(process.env.MAX_MESSAGES_PER_CHAT || 0);
-const MAX_MESSAGE_LENGTH = 8_000;
+const MAX_MESSAGE_LENGTH = 2_000;
 const MAX_IMAGE_DATA_URL_LENGTH = 6_000_000;
 const MAX_IMAGES_PER_REQUEST = 5;
 const TITLE_REFINE_MIN_USER_MESSAGES = 2;
@@ -99,6 +99,16 @@ function sanitizeText(value) {
     .replace(/\u0000/g, '')
     .trim()
     .slice(0, MAX_MESSAGE_LENGTH);
+}
+
+function hasOversizedText(messages) {
+  if (!Array.isArray(messages)) return false;
+  return messages.some((message) => {
+    const content = message?.content;
+    if (typeof content === 'string') return content.length > MAX_MESSAGE_LENGTH;
+    if (!Array.isArray(content)) return false;
+    return content.some((part) => typeof part?.text === 'string' && part.text.length > MAX_MESSAGE_LENGTH);
+  });
 }
 
 function isAllowedImageUrl(url) {
@@ -728,32 +738,14 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
     }
 
-    const auth = getAuthUser(request);
-    if (!auth?.userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const auth = await getAuthUser(request);
 
     const db = await getDb();
     if (!db) {
       return NextResponse.json({ error: 'Database not available. Please try again later.' }, { status: 503 });
     }
 
-    const { ObjectId } = await import('mongodb');
-    let currentUser = null;
-    try {
-      currentUser = await db.collection('users').findOne(
-        { _id: ObjectId.createFromHexString(auth.userId) },
-        { projection: { password: 0 } }
-      );
-    } catch {
-      return NextResponse.json({ error: 'Invalid session. Please sign in again.' }, { status: 401 });
-    }
-
-    if (!currentUser) {
-      return NextResponse.json({ error: 'User not found. Please sign in again.' }, { status: 401 });
-    }
-
-    currentUser = await ensureLifetimeAccess(db, currentUser);
+    const currentUser = auth.mongoUser;
     const userId = auth.userId;
 
     // Image generation mode
@@ -766,7 +758,14 @@ export async function POST(request) {
         );
       }
 
-      const prompt = sanitizeText(body?.imagePrompt || body?.prompt || '');
+      const rawPrompt = String(body?.imagePrompt || body?.prompt || '');
+      if (rawPrompt.length > MAX_MESSAGE_LENGTH) {
+        return NextResponse.json(
+          { error: `Image prompt is too long. Please keep it under ${MAX_MESSAGE_LENGTH} characters.` },
+          { status: 400 }
+        );
+      }
+      const prompt = sanitizeText(rawPrompt);
       if (!prompt) {
         return NextResponse.json({ error: 'Image prompt is required.' }, { status: 400 });
       }
@@ -780,6 +779,12 @@ export async function POST(request) {
         });
       } catch (error) {
         if (error instanceof AccessError) {
+          await logRateLimitHit(db, {
+            userId,
+            email: currentUser.email,
+            feature: error.feature,
+            message: error.message,
+          });
           return NextResponse.json(
             accessErrorPayload(error),
             { status: error.status }
@@ -806,6 +811,13 @@ export async function POST(request) {
     }
 
     // Chat mode
+    if (hasOversizedText(body?.messages)) {
+      return NextResponse.json(
+        { error: `Message is too long. Please keep each message under ${MAX_MESSAGE_LENGTH} characters.` },
+        { status: 400 }
+      );
+    }
+
     const safeMessages = toSafeMessages(body?.messages);
     if (safeMessages.length === 0) {
       return NextResponse.json({ error: 'At least one message is required.' }, { status: 400 });
@@ -863,6 +875,12 @@ export async function POST(request) {
       });
     } catch (error) {
       if (error instanceof AccessError) {
+        await logRateLimitHit(db, {
+          userId,
+          email: currentUser.email,
+          feature: error.feature,
+          message: error.message,
+        });
         return NextResponse.json(
           accessErrorPayload(error),
           { status: error.status }
@@ -1296,8 +1314,13 @@ export async function POST(request) {
       },
     });
   } catch (error) {
+    if (error instanceof AuthError) return authErrorResponse(error);
+    if (error instanceof AccessError) {
+      return NextResponse.json(accessErrorPayload(error), { status: error.status });
+    }
+    console.error('Chat API error:', error);
     return NextResponse.json(
-      { error: error?.message || 'Internal server error.' },
+      { error: 'Internal server error.' },
       { status: 500 }
     );
   }

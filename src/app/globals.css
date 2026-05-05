@@ -1146,6 +1146,73 @@ body {
   border: 1px solid rgba(248, 113, 113, 0.25);
 }
 
+.auth-google {
+  padding: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: var(--radius-md);
+  background: #ffffff;
+  color: #0f172a;
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 48px;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.12);
+}
+
+.auth-google:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.16);
+}
+
+.auth-google:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.auth-google-icon {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+}
+
+.auth-google-icon svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 18px 0 8px;
+  font-size: 0.72rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border-glass);
+}
+
 .auth-submit {
   padding: 12px;
   border: none;
@@ -5666,4 +5733,157 @@ button.list-card:hover {
 [data-theme="light"] .app-layout.device-tablet .arithmo-sidebar {
   background: linear-gradient(180deg, rgba(248, 250, 252, 0.99), rgba(241, 245, 249, 0.99)) !important;
   border-right-color: rgba(15, 23, 42, 0.1);
+}
+/* Firebase auth migration cleanup: the Arithmo brand is the only portrait sidebar toggle. */
+.mobile-menu-btn,
+.tablet-sidebar-toggle,
+.tablet-sidebar-close-btn {
+  display: none !important;
+}
+
+.sidebar-logo-toggle {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  border-radius: 14px;
+  padding: 6px 8px;
+  transition: background 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+.sidebar-logo-toggle:hover,
+.sidebar-logo-toggle.active {
+  background: rgba(59, 130, 246, 0.12);
+  box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.28), 0 0 24px rgba(99, 102, 241, 0.18);
+}
+
+.sidebar-logo-toggle:active {
+  transform: scale(0.98);
+}
+
+.app-layout.device-mobile .arithmo-sidebar,
+.app-layout.device-tablet.tablet-portrait .arithmo-sidebar {
+  width: min(300px, 88vw);
+  max-width: 300px;
+  transform: translateX(-105%);
+  transition: transform 280ms ease;
+}
+
+.app-layout.device-mobile .arithmo-sidebar.open,
+.app-layout.device-tablet.tablet-portrait .arithmo-sidebar.open {
+  transform: translateX(0);
+}
+
+.app-layout.device-mobile .mobile-overlay.visible,
+.app-layout.device-tablet.tablet-portrait .mobile-overlay.visible {
+  opacity: 1;
+  pointer-events: auto;
+  backdrop-filter: blur(7px);
+  background: rgba(2, 6, 23, 0.62);
+}
+
+.admin-page {
+  min-height: 100dvh;
+  color: var(--text-primary);
+  background:
+    radial-gradient(circle at 20% 10%, rgba(59, 130, 246, 0.18), transparent 34%),
+    radial-gradient(circle at 85% 85%, rgba(124, 58, 237, 0.16), transparent 36%),
+    var(--bg-primary);
+  padding: 32px;
+}
+
+.admin-shell {
+  width: min(1120px, 100%);
+  margin: 0 auto;
+}
+
+.admin-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+
+.admin-header p {
+  margin: 0 0 6px;
+  color: var(--text-muted);
+}
+
+.admin-header h1 {
+  margin: 0;
+  font-size: clamp(2rem, 5vw, 3.5rem);
+}
+
+.admin-header a,
+.admin-notice,
+.admin-error,
+.admin-card,
+.admin-panel {
+  border: 1px solid var(--border-glass);
+  background: var(--bg-glass);
+  backdrop-filter: blur(18px);
+  border-radius: 18px;
+}
+
+.admin-header a {
+  color: var(--text-primary);
+  text-decoration: none;
+  padding: 10px 14px;
+}
+
+.admin-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 14px;
+}
+
+.admin-card {
+  padding: 16px;
+}
+
+.admin-card span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  margin-bottom: 10px;
+}
+
+.admin-card strong {
+  font-size: 1.8rem;
+}
+
+.admin-panel {
+  margin-top: 18px;
+  padding: 18px;
+}
+
+.admin-log-list {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-log-list article {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.38);
+}
+
+.admin-log-list small {
+  color: var(--text-muted);
+}
+
+.admin-notice,
+.admin-error {
+  padding: 14px;
+}
+
+.admin-error {
+  color: #fecaca;
+  border-color: rgba(248, 113, 113, 0.4);
 }

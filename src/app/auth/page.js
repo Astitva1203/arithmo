@@ -3,6 +3,14 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Eye, EyeOff } from 'lucide-react';
+import {
+  createUserWithEmailAndPassword,
+  GoogleAuthProvider,
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  updateProfile,
+} from 'firebase/auth';
+import { getFirebaseClientAuth, isFirebaseClientConfigured } from '@/lib/firebaseClient';
 import { resilientFetch } from '@/lib/resilientFetch';
 
 export default function AuthPage() {
@@ -13,6 +21,7 @@ export default function AuthPage() {
   const [name, setName] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [shake, setShake] = useState(false);
   const router = useRouter();
 
@@ -30,18 +39,23 @@ export default function AuthPage() {
     setLoading(true);
 
     try {
-      const endpoint = '/api/auth/login';
-      const body = {
-        email,
-        password,
-        name,
-        allowPasswordReset: !isLogin,
-      };
+      if (!isFirebaseClientConfigured()) {
+        throw new Error('Firebase is not configured. Please add the Firebase environment variables.');
+      }
 
-      const res = await resilientFetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+      const firebaseAuth = getFirebaseClientAuth();
+      const credentials = isLogin
+        ? await signInWithEmailAndPassword(firebaseAuth, email.trim(), password)
+        : await createUserWithEmailAndPassword(firebaseAuth, email.trim(), password);
+
+      if (!isLogin && name.trim()) {
+        await updateProfile(credentials.user, { displayName: name.trim().slice(0, 80) });
+      }
+
+      await credentials.user.getIdToken(true);
+
+      const res = await resilientFetch('/api/auth/me', {
+        method: 'GET',
       });
 
       const data = await res.json();
@@ -54,9 +68,66 @@ export default function AuthPage() {
 
       router.push('/');
       router.refresh();
-    } catch {
-      handleSetError('Network error. Please try again.');
+    } catch (err) {
+      const code = err?.code || '';
+      const friendly =
+        code.includes('invalid-credential') || code.includes('wrong-password') || code.includes('user-not-found')
+          ? 'Invalid email or password.'
+          : code.includes('email-already-in-use')
+            ? 'This email already has an account. Please sign in.'
+            : err?.message || 'Network error. Please try again.';
+      handleSetError(friendly);
       setLoading(false);
+    }
+  }
+
+  async function handleGoogleSignIn() {
+    handleSetError('');
+    setGoogleLoading(true);
+
+    try {
+      if (!isFirebaseClientConfigured()) {
+        throw new Error('Firebase is not configured. Please add the Firebase environment variables.');
+      }
+
+      const firebaseAuth = getFirebaseClientAuth();
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: 'select_account' });
+
+      const result = await signInWithPopup(firebaseAuth, provider);
+      const token = await result.user.getIdToken();
+
+      const res = await resilientFetch(
+        '/api/auth/me',
+        {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+        { skipAuth: true }
+      );
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        handleSetError(data.error || 'Login failed. Please try again.');
+        setGoogleLoading(false);
+        return;
+      }
+
+      router.push('/');
+      router.refresh();
+    } catch (err) {
+      const code = err?.code || '';
+      const friendly =
+        code.includes('popup-closed-by-user') || code.includes('cancelled-popup-request')
+          ? 'Login canceled.'
+          : code.includes('popup-blocked')
+            ? 'Popup blocked. Please allow popups and try again.'
+            : err?.message || 'Login failed. Please try again.';
+      handleSetError(friendly);
+      setGoogleLoading(false);
     }
   }
 
@@ -87,6 +158,39 @@ export default function AuthPage() {
           >
             Sign Up
           </button>
+        </div>
+
+        <button
+          type="button"
+          className="auth-google"
+          onClick={handleGoogleSignIn}
+          disabled={loading || googleLoading}
+        >
+          <span className="auth-google-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" role="img" focusable="false">
+              <path
+                d="M23.2 12.3c0-.8-.1-1.6-.2-2.4H12v4.5h6.3a5.4 5.4 0 0 1-2.3 3.6v3h3.7c2.2-2 3.5-5 3.5-8.7z"
+                fill="#4285F4"
+              />
+              <path
+                d="M12 24c3.2 0 5.9-1.1 7.8-2.9l-3.7-3c-1 .7-2.3 1.2-4.1 1.2-3.1 0-5.8-2.1-6.7-5H1.5v3.1A12 12 0 0 0 12 24z"
+                fill="#34A853"
+              />
+              <path
+                d="M5.3 14.3a7.2 7.2 0 0 1 0-4.6V6.6H1.5a12 12 0 0 0 0 10.9l3.8-3.2z"
+                fill="#FBBC05"
+              />
+              <path
+                d="M12 4.8c1.7 0 3.2.6 4.4 1.7l3.3-3.3A11.4 11.4 0 0 0 12 0 12 12 0 0 0 1.5 6.6l3.8 3.1c.9-2.9 3.6-4.9 6.7-4.9z"
+                fill="#EA4335"
+              />
+            </svg>
+          </span>
+          <span>{googleLoading ? 'Connecting...' : 'Continue with Google'}</span>
+        </button>
+
+        <div className="auth-divider" aria-hidden="true">
+          <span>or</span>
         </div>
 
         <form onSubmit={handleSubmit} className="auth-form">
@@ -156,13 +260,17 @@ export default function AuthPage() {
 
           {error && <div className="auth-error">{error}</div>}
 
-          <button type="submit" className={`auth-submit ${shake ? 'shake' : ''}`} disabled={loading}>
+          <button
+            type="submit"
+            className={`auth-submit ${shake ? 'shake' : ''}`}
+            disabled={loading || googleLoading}
+          >
             {loading ? (
               <span className="auth-spinner" />
             ) : isLogin ? (
               'Sign In'
             ) : (
-              'Create Or Reset Account'
+              'Create Account'
             )}
           </button>
         </form>

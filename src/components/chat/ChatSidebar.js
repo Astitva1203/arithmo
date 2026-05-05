@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { ChevronDown, MessageSquare, Plus, Search, Settings, Trash2, X } from 'lucide-react';
+import { ChevronDown, MessageSquare, Plus, Search, Settings, Trash2 } from 'lucide-react';
 
 function formatChatTimestamp(chat) {
   const rawValue = chat?.updatedAt || chat?.createdAt || chat?.timestamp;
@@ -49,7 +49,7 @@ export default function ChatSidebar({
 }) {
   const isDesktop = deviceType === 'desktop';
   const isTablet = deviceType === 'tablet';
-  const showFullSidebar = isDesktop || isTablet;
+  const showFullSidebar = true;
   const allRecentChats = Array.isArray(chats) ? chats : [];
   const userInitial = (user?.name || user?.email || 'A')[0]?.toUpperCase();
   const isPremium = Boolean(user?.isPremium || user?.isLifetime);
@@ -142,17 +142,18 @@ export default function ChatSidebar({
                 <h2>Arithmo</h2>
               </button>
             ) : (
-              <>
+              <button
+                className={`arithmo-brand-toggle sidebar-logo-toggle ${sidebarOpen ? 'active' : ''}`}
+                type="button"
+                aria-label={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
+                title={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
+                onClick={onCloseSidebar}
+              >
                 <img src="/logo.png" alt="Arithmo" className="arithmo-brand-logo" />
                 <h2>Arithmo</h2>
-              </>
+              </button>
             )}
           </div>
-          {isTablet && (
-            <button className="tablet-sidebar-close-btn" type="button" aria-label="Close sidebar" onClick={onCloseSidebar}>
-              <X size={18} />
-            </button>
-          )}
         </div>
 
         <div className="arithmo-sidebar-scroll">
@@ -160,9 +161,9 @@ export default function ChatSidebar({
           <button
             type="button"
             className="arithmo-new-chat-btn"
-            onClick={() => {
+              onClick={() => {
               onCreateNewChat?.();
-              if (isTablet && tabletOrientation === 'portrait') {
+              if (!isDesktop && (deviceType === 'mobile' || tabletOrientation === 'portrait')) {
                 onCloseSidebar?.();
               }
             }}
@@ -199,7 +200,7 @@ export default function ChatSidebar({
                         className="arithmo-recent-select"
                         onClick={() => {
                           onSelectChat?.(chat.id);
-                          if (isTablet && tabletOrientation === 'portrait') {
+                          if (!isDesktop && (deviceType === 'mobile' || tabletOrientation === 'portrait')) {
                             onCloseSidebar?.();
                           }
                         }}
