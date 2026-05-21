@@ -4,13 +4,13 @@ import { initializeApp, getApp, getApps } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 
 const firebaseConfig = {
-  apiKey: "AIzaSyDFsiG_X4XSzFJ068leANb5kTZl_L9AjIY",
-  authDomain: "arithmo-e0275.firebaseapp.com",
-  projectId: "arithmo-e0275",
-  storageBucket: "arithmo-e0275.appspot.com",
-  messagingSenderId: "1051443488888",
-  appId: "1:1051443488888:web:1234567890abcdef",
-  measurementId: "G-1234567890",
+  apiKey: "",
+  authDomain: "",
+  projectId: "",
+  storageBucket: "",
+  messagingSenderId: "",
+  appId: "",
+  measurementId: "",
 };
 
 let clientAuth = null;
