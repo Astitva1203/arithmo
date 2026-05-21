@@ -1,14 +1,14 @@
 {
-  "appId": "com.arithmo.ai",
-  "appName": "Arithmo",
-  "webDir": "public",
+  "appId": "com.techyou.arithmo",
+  "appName": "Arithmo AI",
+  "webDir": "out",
   "bundledWebRuntime": false,
   "server": {
-    "url": "https://arithmo-sepia.vercel.app",
+    "url": "https://arithmo-teal.vercel.app",
     "androidScheme": "https",
-    "cleartext": false,
+    "cleartext": true,
     "allowNavigation": [
-      "arithmo-sepia.vercel.app",
+      "arithmo-teal.vercel.app",
       "*.vercel.app"
     ]
   }

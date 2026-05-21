@@ -1,7 +1,7 @@
 'use client';
 
 export default function TypingIndicator({ isSearching, isGenerating }) {
-  const title = isSearching ? 'Searching the web' : isGenerating ? 'Generating answer' : 'Thinking';
+  const title = isSearching ? 'Searching web...' : isGenerating ? 'Generating answer' : 'Thinking';
 
   return (
     <div className="typing-shell" role="status" aria-live="polite">

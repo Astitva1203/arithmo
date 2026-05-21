@@ -1,10 +1,10 @@
 apply plugin: 'com.android.application'
 
 android {
-    namespace = "com.arithmo.ai"
+    namespace = "com.techyou.arithmo"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "com.arithmo.ai"
+        applicationId "com.techyou.arithmo"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1

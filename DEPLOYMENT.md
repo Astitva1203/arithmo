@@ -59,6 +59,7 @@ Set all runtime variables in Vercel Project Settings -> Environment Variables:
 
 - GROQ_API_KEY
 - GEMINI_API_KEY
+- GEMINI_BACKUP_API_KEY
 - GEMINI_MODEL
 - NVIDIA_API_KEY
 - FREEPIK_API_KEY

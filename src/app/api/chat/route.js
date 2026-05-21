@@ -18,7 +18,6 @@ import {
   formatSearchResultsForPrompt,
   formatSourcesMarkdown,
   runWebSearch,
-  summarizeSearchFailure,
   shouldUseWebSearch,
 } from '@/services/search/webSearch';
 
@@ -86,6 +85,8 @@ const TITLE_REFINE_MIN_USER_MESSAGES = 2;
 const TITLE_REFINE_SEED_LIMIT = 8;
 const FREEPIK_POLL_INTERVAL_MS = 1_500;
 const FREEPIK_POLL_TIMEOUT_MS = 45_000;
+const DEFAULT_BUSY_MESSAGE = 'Arithmo AI is temporarily busy. Please try again in a few seconds.';
+const IMAGE_BUSY_MESSAGE = 'Image generation is temporarily busy. Please try again in a few seconds.';
 const ACTION_CHAT = 'chat';
 const ACTION_PRACTICE = 'practice';
 const MAX_CLIENT_REQUEST_ID_LENGTH = 120;
@@ -320,6 +321,7 @@ function buildSystemPrompt({
   searchContext,
   searchFailed,
   searchError,
+  searchIntent,
 }) {
   const modeBlock =
     responseMode === 'speed'
@@ -360,6 +362,10 @@ function buildSystemPrompt({
   const reasoningGuard =
     'Do not output hidden reasoning, scratchpad, chain-of-thought, or internal deliberation. Provide only the final helpful answer.';
 
+  const freshnessGuard = searchIntent
+    ? 'If the user asks for recent or live information, do not mention training cutoffs or knowledge limits. If live retrieval is unavailable, give a best-effort response and include a short "Freshness Notice" without mentioning any cutoff.'
+    : '';
+
   const modeInstruction =
     chatMode === 'research'
       ? `RESEARCH MODE REQUIREMENTS:
@@ -383,7 +389,7 @@ If web context is used, include a short "Sources" section with links.`
     : 'No external web context was provided for this turn.';
 
   const freshnessBlock =
-    searchFailed && (chatMode === 'search' || chatMode === 'research')
+    searchFailed && (chatMode === 'search' || chatMode === 'research' || searchIntent)
       ? `Search retrieval failed this turn. Mention freshness limits briefly and continue with best-effort knowledge.
 Search issue: ${searchError || 'unknown error'}.`
       : '';
@@ -397,6 +403,8 @@ ${difficultyBlock}
 ${learningBlock ? `${learningBlock}\n\n` : ''}
 
 ${reasoningGuard}
+
+${freshnessGuard}
 
 ${modeInstruction}
 
@@ -477,24 +485,26 @@ function getClientFacingRouterMessage(error) {
   const metadataMessage = sanitizeText(error?.metadata?.clientMessage || '');
   if (metadataMessage) return metadataMessage;
 
-  const raw = sanitizeText(error?.message || '');
-  if (!raw) {
-    return 'Unable to generate a response right now. Please try again.';
-  }
+  return DEFAULT_BUSY_MESSAGE;
+}
 
-  const lower = raw.toLowerCase();
-  if (
-    lower.includes('selected ai provider failed') ||
-    lower.includes('http ') ||
-    lower.includes('upstream') ||
-    lower.includes('socket') ||
-    lower.includes('fetch') ||
-    lower.includes('status code')
-  ) {
-    return 'AI providers are temporarily unavailable. Please try again in a moment.';
-  }
+function resolveProviderName(error, fallbackProvider) {
+  if (error?.metadata?.initialProvider) return error.metadata.initialProvider;
+  const details = Array.isArray(error?.details) ? error.details : [];
+  const lastAttempt = details[details.length - 1];
+  if (lastAttempt?.provider) return lastAttempt.provider;
+  return fallbackProvider || '';
+}
 
-  return raw;
+function logChatError(error, { user, selectedMode, selectedModel, provider }) {
+  console.error({
+    message: error?.message,
+    stack: error?.stack,
+    user: user?.email,
+    selectedMode,
+    selectedModel,
+    provider,
+  });
 }
 
 function normalizeGeneratedTitle(rawTitle, fallback) {
@@ -707,6 +717,10 @@ function buildNextQuestionSuggestions(topicText) {
   ].join('\n');
 }
 
+function buildFreshnessNotice() {
+  return 'Live web retrieval was unavailable. This response may be out of date.';
+}
+
 function applyPracticeAction(messages) {
   if (!Array.isArray(messages) || messages.length === 0) return messages;
   const latestIndex = messages.length - 1;
@@ -729,6 +743,10 @@ Return exactly:
 }
 
 export async function POST(request) {
+  let currentUser = null;
+  let responseMode = null;
+  let effectiveModelMode = null;
+  let effectiveRequestedProvider = null;
   try {
     const requestSignal = request.signal;
     let body;
@@ -745,7 +763,7 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Database not available. Please try again later.' }, { status: 503 });
     }
 
-    const currentUser = auth.mongoUser;
+    currentUser = auth.mongoUser;
     const userId = auth.userId;
 
     // Image generation mode
@@ -803,8 +821,14 @@ export async function POST(request) {
           usage,
         });
       } catch (error) {
+        logChatError(error, {
+          user: currentUser,
+          selectedMode: 'image',
+          selectedModel: 'freepik',
+          provider: 'freepik',
+        });
         return NextResponse.json(
-          { error: error?.message || 'Image generation failed.' },
+          { error: IMAGE_BUSY_MESSAGE },
           { status: 502 }
         );
       }
@@ -854,11 +878,14 @@ export async function POST(request) {
       );
     }
     const requestedResponseMode = normalizeResponseMode(body?.responseMode || body?.mode);
-    const responseMode = requestedResponseMode || inferResponseMode(latestUserText);
+    responseMode = requestedResponseMode || inferResponseMode(latestUserText);
     const difficultyShift = getDifficultyShift(safeMessages);
     const lastUserMessage = [...effectiveMessages].reverse().find((m) => m.role === 'user');
     const userContent = getMessageText(lastUserMessage?.content) || 'Please analyze this image.';
     const userImageDataUrl = getMessageImageUrl(lastUserMessage?.content);
+    const searchIntentDetected = shouldUseWebSearch({ query: latestUserText, chatMode });
+    const requestedSearchMode =
+      chatMode === 'chat' && searchIntentDetected ? 'search' : chatMode;
     let usage;
 
     try {
@@ -869,8 +896,8 @@ export async function POST(request) {
         userId,
         units: {
           chat: 1,
-          search: chatMode === 'search' ? 1 : 0,
-          research: chatMode === 'research' ? 1 : 0,
+          search: requestedSearchMode === 'search' ? 1 : 0,
+          research: requestedSearchMode === 'research' ? 1 : 0,
         },
       });
     } catch (error) {
@@ -889,8 +916,8 @@ export async function POST(request) {
       throw error;
     }
 
-    const effectiveModelMode = getEffectiveModelMode(currentUser, modelMode);
-    const effectiveRequestedProvider = getEffectiveProvider(currentUser, requestedProvider);
+    effectiveModelMode = getEffectiveModelMode(currentUser, modelMode);
+    effectiveRequestedProvider = getEffectiveProvider(currentUser, requestedProvider);
     let shouldGenerateInitialTitle = false;
 
     if (auth?.userId && chatId) {
@@ -946,7 +973,9 @@ export async function POST(request) {
     }
 
     // RAG / search stage
-    const wantSearch = shouldUseWebSearch({ query: latestUserText, chatMode });
+    const shouldAttemptSearch = requestedSearchMode === 'search' || requestedSearchMode === 'research';
+    let effectiveChatMode = requestedSearchMode;
+    let searchFailure = null;
     let searchResult = {
       used: false,
       provider: 'none',
@@ -954,13 +983,34 @@ export async function POST(request) {
       error: null,
     };
 
-    if (wantSearch && latestUserText) {
+    if (shouldAttemptSearch && latestUserText) {
       searchResult = await runWebSearch({
         query: latestUserText,
-        limit: chatMode === 'research' ? 5 : 5,
+        limit: 5,
         timeoutMs: 10_000,
-        mode: chatMode,
+        mode: requestedSearchMode,
       });
+
+      if (!searchResult.used) {
+        searchFailure = searchResult.error;
+        if (requestedSearchMode === 'search') {
+          const researchResult = await runWebSearch({
+            query: latestUserText,
+            limit: 5,
+            timeoutMs: 12_000,
+            mode: 'research',
+          });
+          if (researchResult.used) {
+            searchResult = researchResult;
+            effectiveChatMode = 'research';
+          } else {
+            searchFailure = researchResult.error || searchFailure;
+            effectiveChatMode = 'chat';
+          }
+        } else if (requestedSearchMode === 'research') {
+          effectiveChatMode = 'chat';
+        }
+      }
     }
 
     const searchContext = searchResult.used
@@ -972,11 +1022,12 @@ export async function POST(request) {
     const systemPrompt = buildSystemPrompt({
       responseMode,
       difficultyShift,
-      chatMode,
+      chatMode: effectiveChatMode,
       learningMode,
       searchContext,
-      searchFailed: wantSearch && !searchResult.used,
-      searchError: searchResult.error,
+      searchFailed: shouldAttemptSearch && !searchResult.used,
+      searchError: searchFailure || searchResult.error,
+      searchIntent: searchIntentDetected,
     });
 
     let routeResult;
@@ -988,7 +1039,7 @@ export async function POST(request) {
         systemPrompt,
         latestUserText,
         hasImageInput,
-        chatMode,
+        chatMode: effectiveChatMode,
         responseMode,
         timeoutMs: 75_000,
         signal: requestSignal,
@@ -999,19 +1050,29 @@ export async function POST(request) {
           return new Response(null, { status: 499 });
         }
 
+        logChatError(error, {
+          user: currentUser,
+          selectedMode: responseMode,
+          selectedModel: effectiveModelMode,
+          provider: resolveProviderName(error, effectiveRequestedProvider),
+        });
+
         const payload = {
           error: getClientFacingRouterMessage(error),
         };
-        if (process.env.NODE_ENV !== 'production') {
-          payload.details = error.details || [];
-        }
         return NextResponse.json(
           payload,
           { status: error.status || 502 }
         );
       }
+      logChatError(error, {
+        user: currentUser,
+        selectedMode: responseMode,
+        selectedModel: effectiveModelMode,
+        provider: effectiveRequestedProvider,
+      });
       return NextResponse.json(
-        { error: error?.message || 'AI routing failed unexpectedly.' },
+        { error: DEFAULT_BUSY_MESSAGE },
         { status: 502 }
       );
     }
@@ -1119,11 +1180,11 @@ export async function POST(request) {
             return;
           }
 
-          if (wantSearch && !searchResult.used && (chatMode === 'search' || chatMode === 'research')) {
+          if (shouldAttemptSearch && !searchResult.used) {
             const freshnessNote = appendSectionIfMissing(
               fullResponse,
               'Freshness Notice',
-              summarizeSearchFailure(searchResult.error)
+              buildFreshnessNotice()
             );
             if (freshnessNote !== fullResponse) {
               const suffix = freshnessNote.slice(fullResponse.length);
@@ -1141,7 +1202,7 @@ export async function POST(request) {
             }
           }
 
-          if (chatMode === 'research') {
+          if (effectiveChatMode === 'research') {
             const withResearchSections = enforceResearchSections(fullResponse, latestUserText);
             if (withResearchSections !== fullResponse) {
               const suffix = withResearchSections.slice(fullResponse.length);
@@ -1150,7 +1211,7 @@ export async function POST(request) {
             }
           }
 
-          if (chatMode === 'search' || chatMode === 'research') {
+          if (effectiveChatMode === 'search' || effectiveChatMode === 'research') {
             const nextQuestionsBlock = buildNextQuestionSuggestions(latestUserText);
             const withNextQuestions = appendSectionIfMissing(
               fullResponse,
@@ -1195,10 +1256,10 @@ export async function POST(request) {
                 queryComplexity,
                 fallbackUsed,
                 fallbackFrom,
-                mode: chatMode,
+                mode: effectiveChatMode,
                 action,
                 ragUsed: Boolean(searchResult.used),
-                researchUsed: chatMode === 'research' && Boolean(searchResult.used),
+                researchUsed: effectiveChatMode === 'research' && Boolean(searchResult.used),
                 sources: searchResult.results || [],
                 timestamp: new Date(now.getTime() + 1),
               };
@@ -1307,7 +1368,7 @@ export async function POST(request) {
         'x-ai-latency-ms': String(elapsedMs),
         'x-rag-used': searchResult.used ? '1' : '0',
         'x-search-provider': searchResult.provider || 'none',
-        'x-research-used': chatMode === 'research' && searchResult.used ? '1' : '0',
+        'x-research-used': effectiveChatMode === 'research' && searchResult.used ? '1' : '0',
         'x-usage-chat-remaining': String(usage?.remaining?.chat ?? ''),
         'x-usage-search-remaining': String(usage?.remaining?.search ?? ''),
         'x-usage-research-remaining': String(usage?.remaining?.research ?? ''),
@@ -1318,9 +1379,14 @@ export async function POST(request) {
     if (error instanceof AccessError) {
       return NextResponse.json(accessErrorPayload(error), { status: error.status });
     }
-    console.error('Chat API error:', error);
+    logChatError(error, {
+      user: currentUser,
+      selectedMode: responseMode,
+      selectedModel: effectiveModelMode,
+      provider: effectiveRequestedProvider,
+    });
     return NextResponse.json(
-      { error: 'Internal server error.' },
+      { error: DEFAULT_BUSY_MESSAGE },
       { status: 500 }
     );
   }

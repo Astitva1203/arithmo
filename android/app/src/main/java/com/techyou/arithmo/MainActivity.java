@@ -1,4 +1,4 @@
-package com.arithmo.ai;
+package com.techyou.arithmo;
 
 import com.getcapacitor.BridgeActivity;
 

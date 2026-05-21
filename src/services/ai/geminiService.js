@@ -1,5 +1,6 @@
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 const GEMINI_DEFAULT_MODEL = process.env.GEMINI_MODEL || 'gemini-3-flash-preview';
+const GEMINI_PRIMARY_KEY_NAME = 'GEMINI_API_KEY';
 
 function buildTimeoutSignal(timeoutMs, parentSignal) {
   const controller = new AbortController();
@@ -147,9 +148,12 @@ async function requestGeminiGenerate({
   maxTokens,
   timeoutMs,
   signal,
+  apiKey,
+  apiKeyName,
 }) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error('GEMINI_API_KEY is missing.');
+  const resolvedKey = apiKey || process.env.GEMINI_API_KEY;
+  const keyLabel = apiKeyName || GEMINI_PRIMARY_KEY_NAME;
+  if (!resolvedKey) throw new Error(`${keyLabel} is missing.`);
 
   const contents = buildContents(messages);
   if (contents.length === 0) {
@@ -168,7 +172,7 @@ async function requestGeminiGenerate({
   };
 
   const modelName = model || GEMINI_DEFAULT_MODEL;
-  const endpoint = `${GEMINI_BASE_URL}/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const endpoint = `${GEMINI_BASE_URL}/${encodeURIComponent(modelName)}:generateContent?key=${encodeURIComponent(resolvedKey)}`;
 
   const { signal: mergedSignal, cleanup } = buildTimeoutSignal(timeoutMs, signal);
   try {
@@ -192,6 +196,10 @@ export function isGeminiConfigured() {
   return Boolean(process.env.GEMINI_API_KEY);
 }
 
+export function isGeminiBackupConfigured() {
+  return Boolean(process.env.GEMINI_BACKUP_API_KEY);
+}
+
 export function getGeminiModel() {
   return GEMINI_DEFAULT_MODEL;
 }
@@ -203,6 +211,8 @@ export async function requestGeminiChatStream({
   maxTokens,
   timeoutMs = 75_000,
   signal,
+  apiKey,
+  apiKeyName,
 }) {
   const { response, data } = await requestGeminiGenerate({
     messages,
@@ -211,6 +221,8 @@ export async function requestGeminiChatStream({
     maxTokens,
     timeoutMs,
     signal,
+    apiKey,
+    apiKeyName,
   });
 
   if (!response.ok) {
@@ -234,6 +246,8 @@ export async function requestGeminiChatCompletion({
   maxTokens = 96,
   timeoutMs = 30_000,
   signal,
+  apiKey,
+  apiKeyName,
 }) {
   const { response, data } = await requestGeminiGenerate({
     messages,
@@ -243,6 +257,8 @@ export async function requestGeminiChatCompletion({
     maxTokens,
     timeoutMs,
     signal,
+    apiKey,
+    apiKeyName,
   });
 
   const text = extractTextFromGeminiResponse(data);

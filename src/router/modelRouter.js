@@ -3,7 +3,11 @@ import {
   groqSupportsVision,
   requestGroqChatStream,
 } from '@/services/ai/groqService';
-import { isGeminiConfigured, requestGeminiChatStream } from '@/services/ai/geminiService';
+import {
+  isGeminiBackupConfigured,
+  isGeminiConfigured,
+  requestGeminiChatStream,
+} from '@/services/ai/geminiService';
 import { isNvidiaConfigured, requestNvidiaChatStream } from '@/services/ai/nvidiaService';
 
 const COMPLEX_QUERY_PATTERN =
@@ -14,7 +18,7 @@ const SIMPLE_QUERY_PATTERN =
 
 const MODEL_MODE_VALUES = new Set(['auto', 'fast', 'smart', 'deep']);
 const LEGACY_PROVIDER_VALUES = new Set(['auto', 'groq', 'gemini', 'nvidia']);
-const FALLBACK_PROVIDER_ORDER = ['gemini', 'groq', 'nvidia'];
+const FALLBACK_PROVIDER_ORDER = ['groq', 'gemini', 'gemini_backup', 'nvidia'];
 
 function normalizeProvider(value) {
   const provider = String(value || 'auto').trim().toLowerCase();
@@ -76,6 +80,9 @@ function isProviderAvailable(provider, { hasImageInput = false } = {}) {
   if (provider === 'gemini') {
     return isGeminiConfigured();
   }
+  if (provider === 'gemini_backup') {
+    return isGeminiBackupConfigured();
+  }
   if (provider === 'nvidia') {
     // NVIDIA route currently handles text-only reliably in this app.
     return isNvidiaConfigured() && !hasImageInput;
@@ -84,63 +91,27 @@ function isProviderAvailable(provider, { hasImageInput = false } = {}) {
 }
 
 function getAvailableProviders(context) {
-  return ['groq', 'gemini', 'nvidia'].filter((provider) =>
+  return ['groq', 'gemini', 'gemini_backup', 'nvidia'].filter((provider) =>
     isProviderAvailable(provider, context)
   );
 }
 
 function chooseAutoProvider({
-  complexity,
-  chatMode = 'chat',
-  responseMode = 'deep',
   hasImageInput = false,
   availableProviders,
 }) {
   if (hasImageInput) {
     if (availableProviders.includes('groq')) return 'groq';
     if (availableProviders.includes('gemini')) return 'gemini';
+    if (availableProviders.includes('gemini_backup')) return 'gemini_backup';
     return availableProviders[0] || null;
   }
 
-  // Real-time mode should prefer faster/balanced models.
-  if (chatMode === 'search') {
-    if (complexity === 'simple' && availableProviders.includes('groq')) return 'groq';
-    if (availableProviders.includes('gemini')) return 'gemini';
-    if (availableProviders.includes('groq')) return 'groq';
-    return availableProviders[0] || null;
+  for (const provider of FALLBACK_PROVIDER_ORDER) {
+    if (availableProviders.includes(provider)) return provider;
   }
 
-  // Research generally benefits from better synthesis before deep escalation.
-  if (chatMode === 'research') {
-    if (complexity === 'complex' && responseMode === 'deep' && availableProviders.includes('nvidia')) {
-      return 'nvidia';
-    }
-    if (availableProviders.includes('gemini')) return 'gemini';
-    if (availableProviders.includes('groq')) return 'groq';
-    if (availableProviders.includes('nvidia')) return 'nvidia';
-    return null;
-  }
-
-  if (complexity === 'simple') {
-    if (availableProviders.includes('groq')) return 'groq';
-    if (availableProviders.includes('gemini')) return 'gemini';
-    if (availableProviders.includes('nvidia')) return 'nvidia';
-    return null;
-  }
-
-  if (complexity === 'medium') {
-    if (availableProviders.includes('gemini')) return 'gemini';
-    if (availableProviders.includes('groq')) return 'groq';
-    if (availableProviders.includes('nvidia')) return 'nvidia';
-    return null;
-  }
-
-  // complex
-  if (responseMode === 'deep' && availableProviders.includes('nvidia')) return 'nvidia';
-  if (availableProviders.includes('gemini')) return 'gemini';
-  if (availableProviders.includes('nvidia')) return 'nvidia';
-  if (availableProviders.includes('groq')) return 'groq';
-  return null;
+  return availableProviders[0] || null;
 }
 
 function resolveModelSelection({
@@ -179,6 +150,15 @@ function resolveModelSelection({
         availableProviders,
       };
     }
+    if (preferredByMode === 'gemini' && availableProviders.includes('gemini_backup')) {
+      return {
+        provider: 'gemini_backup',
+        modelModeUsed: inferredMode,
+        complexity,
+        routeReason: 'mode_override',
+        availableProviders,
+      };
+    }
     return {
       provider: null,
       modelModeUsed: inferredMode,
@@ -189,9 +169,6 @@ function resolveModelSelection({
   }
 
   const autoProvider = chooseAutoProvider({
-    complexity,
-    chatMode,
-    responseMode,
     hasImageInput,
     availableProviders,
   });
@@ -207,18 +184,53 @@ function resolveModelSelection({
 
 function detectFailureType({ status = 0, errorText = '' }) {
   const text = String(errorText || '').toLowerCase();
-  if (status === 429 || text.includes('rate limit')) return 'rate_limit';
-  if (text.includes('quota')) return 'quota_exceeded';
+  if (
+    status === 401 ||
+    status === 403 ||
+    text.includes('unauthorized') ||
+    text.includes('authentication') ||
+    text.includes('invalid api key')
+  ) {
+    return 'auth_error';
+  }
+  if (status === 429) {
+    if (text.includes('quota') || text.includes('limit') || text.includes('insufficient_quota')) {
+      return 'api_limit';
+    }
+    return 'rate_limit';
+  }
+  if (status === 503 || text.includes('service unavailable')) return 'service_unavailable';
   if (status === 408 || text.includes('timeout') || text.includes('timed out')) return 'timeout';
-  if (status === 0 && (text.includes('network') || text.includes('socket') || text.includes('fetch'))) {
+  if (text.includes('quota') || text.includes('limit exceeded') || text.includes('insufficient_quota')) {
+    return 'api_limit';
+  }
+  if (
+    status === 0 &&
+    (text.includes('network') ||
+      text.includes('socket') ||
+      text.includes('fetch') ||
+      text.includes('econn') ||
+      text.includes('enotfound'))
+  ) {
     return 'network_error';
   }
+  if (text.includes('fetch failed') || text.includes('network error')) {
+    return 'network_error';
+  }
+  if (Number(status) >= 500) return 'service_unavailable';
   return 'api_error';
 }
 
 async function callProvider(provider, args) {
   if (provider === 'groq') return requestGroqChatStream(args);
   if (provider === 'gemini') return requestGeminiChatStream(args);
+  if (provider === 'gemini_backup') {
+    return requestGeminiChatStream({
+      ...args,
+      apiKey: process.env.GEMINI_BACKUP_API_KEY,
+      apiKeyName: 'GEMINI_BACKUP_API_KEY',
+    });
+  }
   if (provider === 'nvidia') return requestNvidiaChatStream(args);
   throw new Error('Unknown provider.');
 }
@@ -248,13 +260,24 @@ function buildProviderOrder(initialProvider, availableProviders = []) {
 }
 
 function pickAggregateFailureStatus(attempts = []) {
+  if (attempts.some((attempt) => attempt.failureType === 'auth_error')) {
+    return 401;
+  }
+  if (attempts.some((attempt) => attempt.failureType === 'api_limit')) {
+    return 429;
+  }
   if (attempts.some((attempt) => attempt.failureType === 'rate_limit' || attempt.status === 429)) {
     return 429;
   }
   if (attempts.some((attempt) => attempt.failureType === 'timeout' || attempt.status === 408)) {
     return 504;
   }
-  if (attempts.some((attempt) => attempt.failureType === 'network_error')) {
+  if (
+    attempts.some(
+      (attempt) =>
+        attempt.failureType === 'network_error' || attempt.failureType === 'service_unavailable'
+    )
+  ) {
     return 503;
   }
   if (attempts.some((attempt) => Number(attempt.status) >= 500 || Number(attempt.status) === 0)) {
@@ -265,26 +288,36 @@ function pickAggregateFailureStatus(attempts = []) {
 
 function buildClientFailureMessage(attempts = []) {
   if (!attempts.length) {
-    return 'Unable to generate a response right now. Please try again.';
+    return 'Arithmo AI is temporarily busy. Please try again in a few seconds.';
   }
 
-  if (attempts.some((attempt) => attempt.failureType === 'rate_limit' || attempt.status === 429)) {
-    return 'AI providers are currently busy. Please retry in a moment.';
+  if (attempts.some((attempt) => attempt.failureType === 'auth_error')) {
+    return 'Authentication issue detected.';
   }
-  if (attempts.some((attempt) => attempt.failureType === 'quota_exceeded')) {
-    return 'AI capacity is temporarily exhausted. Please try again shortly.';
+  if (attempts.some((attempt) => attempt.failureType === 'rate_limit' || attempt.status === 429)) {
+    return 'Too many requests. Please wait a moment.';
+  }
+  if (attempts.some((attempt) => attempt.failureType === 'api_limit')) {
+    return 'Service limit reached temporarily.';
   }
   if (attempts.some((attempt) => attempt.failureType === 'timeout')) {
-    return 'The AI request timed out. Please try again.';
+    return 'Request took too long.';
   }
   if (attempts.some((attempt) => attempt.failureType === 'network_error')) {
-    return 'A network issue interrupted the AI request. Please try again.';
+    return 'Connection problem detected.';
   }
-  if (attempts.some((attempt) => Number(attempt.status) >= 500 || Number(attempt.status) === 0)) {
-    return 'AI providers are temporarily unavailable. Please try again in a moment.';
+  if (
+    attempts.some(
+      (attempt) =>
+        attempt.failureType === 'service_unavailable' ||
+        Number(attempt.status) >= 500 ||
+        Number(attempt.status) === 0
+    )
+  ) {
+    return 'Arithmo AI is temporarily busy.';
   }
 
-  return 'Unable to generate a response right now. Please try again.';
+  return 'Arithmo AI is temporarily busy. Please try again in a few seconds.';
 }
 
 function isAbortLikeError(error) {
@@ -369,6 +402,7 @@ export async function routeChatRequest({
           metadata: {
             modelMode: selection.modelModeUsed,
             complexity: selection.complexity,
+            clientMessage: `Selected model mode "${selection.modelModeUsed}" is not configured. Choose a different mode or add the required API key.`,
           },
         }
       );
@@ -380,6 +414,8 @@ export async function routeChatRequest({
       metadata: {
         modelMode: selection.modelModeUsed,
         complexity: selection.complexity,
+        clientMessage:
+          'No AI provider is configured. Add GROQ_API_KEY, GEMINI_API_KEY, GEMINI_BACKUP_API_KEY, or NVIDIA_API_KEY.',
       },
     });
   }

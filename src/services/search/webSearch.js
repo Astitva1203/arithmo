@@ -2,7 +2,7 @@ const MAX_RESULTS = 5;
 const CACHE_TTL_MS = Number(process.env.SEARCH_CACHE_TTL_MS || 90_000);
 const SEARCH_TIMEOUT_MS = Number(process.env.SEARCH_TIMEOUT_MS || 10_000);
 const REALTIME_QUERY_PATTERN =
-  /\b(latest|news|today|current|updates?|recent|happening|new|trend(?:ing)?|this week|this month)\b/i;
+  /\b(latest(?:\s+version|\s+information)?|news|today|current|updates?|update|recent|happening|new|trend(?:ing)?|this week|this month|this year|live|2026)\b/i;
 
 const searchCache = new Map();
 

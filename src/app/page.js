@@ -23,7 +23,7 @@ function createId() {
 const MAX_ATTACH_IMAGE_SIZE = 4 * 1024 * 1024;
 const FREE_PERIOD_NOTICE = 'Arithmo is free to use for a limited time. Enjoy it and make full use of it.';
 const REALTIME_QUERY_PATTERN =
-  /\b(latest|news|today|current|updates?|recent|happening|new|trend(?:ing)?|this week|this month)\b/i;
+  /\b(latest(?:\s+version|\s+information)?|news|today|current|updates?|update|recent|happening|new|trend(?:ing)?|this week|this month|this year|live|2026)\b/i;
 const COMPLEX_QUERY_PATTERN =
   /\b(compare|comparison|versus|vs\.?|analy[sz]e|analysis|deeply|in depth|research|evaluate|pros and cons|multiple perspectives|case study|strategy|debate|long term|tradeoffs?)\b/i;
 const MODEL_MODE_SEQUENCE = ['auto', 'fast', 'smart', 'deep'];
@@ -941,12 +941,22 @@ export default function HomePage() {
     setFallbackNotice('');
     setLatencyMs(0);
     setQueryComplexity('');
+    const autoDetectedMode =
+      requestedAction === 'chat' && !manualModeOverride
+        ? detectAutoChatMode(text)
+        : chatMode;
     const effectiveChatMode =
       requestedAction === 'practice'
         ? 'chat'
         : manualModeOverride
           ? chatMode
-          : detectAutoChatMode(text);
+          : autoDetectedMode;
+    const autoSearchTriggered =
+      requestedAction === 'chat' && !manualModeOverride && autoDetectedMode === 'search';
+
+    if (autoSearchTriggered) {
+      showUiNotice('Searching web...');
+    }
 
     setChatPhase(effectiveChatMode === 'search' || effectiveChatMode === 'research' ? 'searching' : 'generating');
     let chatId = activeChatId;
@@ -1079,6 +1089,7 @@ export default function HomePage() {
       const usedSearchProvider = searchProviderLabel(res.headers.get('x-search-provider'));
       const didUseRag = res.headers.get('x-rag-used') === '1';
       const didUseResearch = res.headers.get('x-research-used') === '1';
+      const actualChatMode = didUseResearch ? 'research' : didUseRag ? 'search' : 'chat';
       setActiveProvider(usedProvider);
       setFallbackNotice(fallbackUsed ? `Switched to ${usedProvider} (fallback)` : '');
       setQueryComplexity(complexity ? `${complexity[0].toUpperCase()}${complexity.slice(1)}` : '');
@@ -1088,6 +1099,17 @@ export default function HomePage() {
       setSearchProvider(usedSearchProvider);
       setIsSearching(false);
       setChatPhase('generating');
+
+      if (autoSearchTriggered && (didUseRag || didUseResearch)) {
+        showUiNotice('Search Mode Active');
+      }
+      if (autoSearchTriggered && requestedAction === 'chat' && !manualModeOverride) {
+        if (didUseResearch) {
+          setChatMode('research');
+        } else if (!didUseRag) {
+          setChatMode('chat');
+        }
+      }
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -1134,7 +1156,7 @@ export default function HomePage() {
             requestId: clientRequestId,
             content: full,
             timestamp: Date.now(),
-            mode: effectiveChatMode,
+            mode: actualChatMode,
             ragUsed: didUseRag,
             researchUsed: didUseResearch,
           },
