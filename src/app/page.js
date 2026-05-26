@@ -1592,11 +1592,15 @@ export default function HomePage() {
     triggerHaptic('Light');
   }, []);
 
+  const isPaidUser = Boolean(user?.isPremium || user?.isLifetime);
+
   const handleOpenNotifications = useCallback(() => {
     setNotificationCount(0);
-    showUiNotice(FREE_PERIOD_NOTICE);
+    if (!isPaidUser) {
+      showUiNotice(FREE_PERIOD_NOTICE);
+    }
     triggerHaptic('Light');
-  }, [showUiNotice]);
+  }, [showUiNotice, isPaidUser]);
 
   const handleUpgradeClick = useCallback(() => {
     router.push('/pricing');
@@ -1619,12 +1623,12 @@ export default function HomePage() {
   }, [deviceType, persistPreference, persistUserSettings]);
 
   useEffect(() => {
-    if (!user || !notificationsEnabled || loginNoticeShownRef.current) return;
+    if (!user || !notificationsEnabled || loginNoticeShownRef.current || isPaidUser) return;
 
     showUiNotice(FREE_PERIOD_NOTICE);
     setNotificationCount(1);
     loginNoticeShownRef.current = true;
-  }, [user, notificationsEnabled, showUiNotice]);
+  }, [user, notificationsEnabled, showUiNotice, isPaidUser]);
 
   const handleBottomTabSelect = useCallback((tab) => {
     setMobileTab(tab);
