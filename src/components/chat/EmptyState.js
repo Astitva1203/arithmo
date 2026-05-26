@@ -62,10 +62,8 @@ export default function EmptyState({
   onSend,
   onAttachClick,
   onGenerateImage,
-  onPractice,
   onChatModeChange,
   composerMode,
-  modeLabel,
   fileInputRef,
   onImageChange,
   selectedImage,
@@ -81,8 +79,6 @@ export default function EmptyState({
   const showExtras = !minimalVisuals;
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
-  const currentModeLabel = modeLabel || (composerMode === 'image' ? 'Image Mode' : 'Chat Mode');
-
   useEffect(() => {
     if (!menuOpen) return undefined;
     const closeOnOutside = (event) => {
@@ -276,15 +272,6 @@ export default function EmptyState({
               disabled={(!input?.trim() && !selectedImage) || isLoading}
             >
               <ArrowUp size={20} strokeWidth={3} />
-            </button>
-          </div>
-
-          <div className="composer-meta-row hero-meta">
-            <span className={`composer-mode-label mode-${composerMode === 'image' ? 'image' : chatMode || 'chat'}`}>
-              {currentModeLabel}
-            </span>
-            <button className="composer-practice-btn" type="button" onClick={onPractice} disabled={isLoading || imageLoading}>
-              Generate Practice
             </button>
           </div>
 

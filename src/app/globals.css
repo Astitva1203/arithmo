@@ -5009,63 +5009,6 @@ button.list-card:hover {
 }
 
 /* ===== SMART MENU + FREEMIUM UI ===== */
-.composer-meta-row {
-  width: min(760px, 100%);
-  margin: 0 auto 8px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  color: #94a3b8;
-  font-size: 0.78rem;
-}
-
-.composer-mode-label {
-  display: inline-flex;
-  align-items: center;
-  min-height: 28px;
-  padding: 5px 10px;
-  border-radius: 999px;
-  border: 1px solid rgba(99, 102, 241, 0.28);
-  background: rgba(99, 102, 241, 0.12);
-  color: #dbeafe;
-  font-weight: 700;
-}
-
-.composer-mode-label.mode-search {
-  border-color: rgba(34, 211, 238, 0.34);
-  background: rgba(8, 145, 178, 0.16);
-}
-
-.composer-mode-label.mode-research {
-  border-color: rgba(168, 85, 247, 0.38);
-  background: rgba(126, 34, 206, 0.16);
-}
-
-.composer-mode-label.mode-image {
-  border-color: rgba(244, 114, 182, 0.38);
-  background: rgba(190, 24, 93, 0.16);
-}
-
-.composer-practice-btn {
-  border: 1px solid rgba(148, 163, 184, 0.24);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.04);
-  color: #cbd5e1;
-  min-height: 30px;
-  padding: 5px 11px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.composer-practice-btn:hover:not(:disabled) {
-  border-color: rgba(99, 102, 241, 0.52);
-  color: #eef2ff;
-  background: rgba(99, 102, 241, 0.14);
-}
 
 .attachment-menu-anchor {
   position: relative;
@@ -5407,25 +5350,7 @@ button.list-card:hover {
   color: #0f172a;
 }
 
-[data-theme="light"] .composer-mode-label {
-  color: #1e3a8a;
-}
-
-[data-theme="light"] .composer-practice-btn {
-  color: #334155;
-  background: rgba(15, 23, 42, 0.04);
-}
-
 @media (max-width: 767px) {
-  .composer-meta-row {
-    width: calc(100% - 24px);
-    flex-wrap: wrap;
-  }
-
-  .composer-practice-btn {
-    min-height: 34px;
-  }
-
   .attachment-menu-popup {
     position: fixed;
     left: 12px;

@@ -1355,11 +1355,6 @@ export default function HomePage() {
     textareaRef.current?.focus();
   }, []);
 
-  const generatePracticeSet = useCallback(() => {
-    if (isLoading || imageLoading) return;
-    sendMessage({ action: 'practice' });
-  }, [isLoading, imageLoading, sendMessage]);
-
   const createSummaryPrompt = useCallback(() => {
     setInput('Summarize this conversation with key takeaways and action items.');
     textareaRef.current?.focus();
@@ -1790,10 +1785,8 @@ export default function HomePage() {
                 onSend={isLoading ? stopGeneration : composerMode === 'image' ? generateImage : () => sendMessage()}
                 onAttachClick={onAttachClick}
                 onGenerateImage={handleCreateImageMode}
-                onPractice={generatePracticeSet}
                 composerMode={composerMode}
                 onComposerModeChange={setComposerMode}
-                modeLabel={chatModeLabel(chatMode, composerMode)}
                 onChatModeChange={handleModeChange}
                 fileInputRef={fileInputRef}
                 onImageChange={onImageChange}
@@ -1848,13 +1841,11 @@ export default function HomePage() {
               onSend={isLoading ? stopGeneration : composerMode === 'image' ? generateImage : () => sendMessage()}
               onAttachClick={onAttachClick}
               onGenerateImage={handleCreateImageMode}
-              onPractice={generatePracticeSet}
               onSummary={createSummaryPrompt}
               chatMode={chatMode}
               onChatModeChange={handleModeChange}
               composerMode={composerMode}
               onComposerModeChange={setComposerMode}
-              modeLabel={chatModeLabel(chatMode, composerMode)}
               onCycleLearningMode={handleCycleLearningMode}
               learningMode={learningMode}
               onMic={handleMicTap}

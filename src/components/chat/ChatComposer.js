@@ -13,7 +13,6 @@ import {
   MessageSquare,
   Search,
   Sparkles,
-  Dumbbell
 } from 'lucide-react';
 
 export default function ChatComposer({
@@ -23,11 +22,9 @@ export default function ChatComposer({
   onSend,
   onAttachClick,
   onGenerateImage,
-  onPractice,
   chatMode,
   onChatModeChange,
   composerMode,
-  modeLabel,
   onMic,
   isListening,
   micAvailable,
@@ -41,8 +38,6 @@ export default function ChatComposer({
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
-  const modeText = modeLabel || (composerMode === 'image' ? 'Image Mode' : 'Chat Mode');
-
   useEffect(() => {
     if (!menuOpen) return undefined;
 
@@ -84,15 +79,6 @@ export default function ChatComposer({
           </button>
         </div>
       )}
-
-      <div className="composer-meta-row">
-        <span className={`composer-mode-label mode-${composerMode === 'image' ? 'image' : chatMode || 'chat'}`}>
-          {modeText}
-        </span>
-        <button className="composer-practice-btn" type="button" onClick={onPractice} disabled={isLoading || imageLoading}>
-          <Dumbbell size={14} /> Generate Practice
-        </button>
-      </div>
 
       <div className="pill-composer">
         <div className="attachment-menu-anchor" ref={menuRef}>
