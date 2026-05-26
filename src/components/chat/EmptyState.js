@@ -64,6 +64,7 @@ export default function EmptyState({
   onGenerateImage,
   onChatModeChange,
   composerMode,
+  inputRef,
   fileInputRef,
   onImageChange,
   selectedImage,
@@ -242,6 +243,7 @@ export default function EmptyState({
             </div>
 
             <input
+              ref={inputRef}
               type="text"
               className="ask-input"
               placeholder={composerMode === 'image' ? 'Describe the image you want...' : 'Ask anything...'}
@@ -249,6 +251,7 @@ export default function EmptyState({
               onChange={(e) => onInputChange(e.target.value)}
               onKeyDown={onKeyDown}
               disabled={isLoading}
+              autoFocus={deviceType === 'mobile'}
             />
             <input
               ref={fileInputRef}

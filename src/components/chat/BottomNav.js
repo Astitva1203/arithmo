@@ -1,7 +1,7 @@
 import React from 'react';
 import { Home, MessageSquare, Plus, LayoutGrid, User } from 'lucide-react';
 
-export default function BottomNav({ activeTab, onTabSelect }) {
+export default function BottomNav({ activeTab, onTabSelect, user }) {
   return (
     <div className="bottom-nav-bar">
       <button 
@@ -40,7 +40,11 @@ export default function BottomNav({ activeTab, onTabSelect }) {
         onClick={() => onTabSelect('profile')}
         type="button"
       >
-        <User size={24} />
+        {user?.avatar ? (
+          <img src={user.avatar} alt="Profile" className="nav-avatar" />
+        ) : (
+          <User size={24} />
+        )}
         <span>Profile</span>
       </button>
     </div>

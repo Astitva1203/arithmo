@@ -292,6 +292,7 @@ export default function HomePage() {
   const [compactMessages, setCompactMessages] = useState(false);
   const [minimalVisuals, setMinimalVisuals] = useState(true);
   const [mobileTab, setMobileTab] = useState('home');
+  const [mobileToolsOpen, setMobileToolsOpen] = useState(false);
   const [uiNotice, setUiNotice] = useState('');
   const [notificationCount, setNotificationCount] = useState(1);
   const [billingUsage, setBillingUsage] = useState(null);
@@ -313,6 +314,7 @@ export default function HomePage() {
   const pendingMessagesRef = useRef(new Map());
   const activeChatIdRef = useRef(null);
   const messagesRef = useRef([]);
+  const askInputRef = useRef(null);
 
   const applySettings = useCallback((settings) => {
     const normalized = normalizeUserSettings(settings);
@@ -478,6 +480,12 @@ export default function HomePage() {
     localStorage.setItem(PIN_STORAGE_KEY, JSON.stringify(pinnedByChat || {}));
   }, [pinnedByChat]);
 
+  useEffect(() => {
+    if (deviceType !== 'mobile' && mobileToolsOpen) {
+      setMobileToolsOpen(false);
+    }
+  }, [deviceType, mobileToolsOpen]);
+
   // ===== Load chats (staggered to avoid DDoS triggers) =====
   useEffect(() => {
     if (!user) return;
@@ -536,8 +544,19 @@ export default function HomePage() {
 
   // ===== Focus input =====
   useEffect(() => {
-    if (!authLoading && user) textareaRef.current?.focus();
-  }, [authLoading, user, activeChatId]);
+    if (authLoading || !user) return;
+
+    if (deviceType !== 'mobile') {
+      textareaRef.current?.focus();
+      return;
+    }
+
+    if (sidebarOpen || settingsOpen || mobileToolsOpen) return;
+    const target = askInputRef.current || textareaRef.current;
+    if (target && document.activeElement !== target) {
+      window.requestAnimationFrame(() => target.focus());
+    }
+  }, [authLoading, user, activeChatId, deviceType, sidebarOpen, settingsOpen, mobileToolsOpen, mobileTab]);
 
   // ===== Voice input =====
   useEffect(() => {
@@ -1408,6 +1427,44 @@ export default function HomePage() {
     textareaRef.current?.focus();
   }, [showUiNotice]);
 
+  const openMobileTools = useCallback(() => {
+    setMobileToolsOpen(true);
+    setSidebarOpen(false);
+    triggerHaptic('Light');
+  }, []);
+
+  const closeMobileTools = useCallback(() => {
+    setMobileToolsOpen(false);
+  }, []);
+
+  const handleMobileToolSelect = useCallback((actionId) => {
+    setMobileToolsOpen(false);
+    setMobileTab('home');
+
+    switch (actionId) {
+      case 'chat':
+        handleModeChange('chat');
+        return;
+      case 'search':
+        handleModeChange('search');
+        return;
+      case 'research':
+        handleModeChange('research');
+        return;
+      case 'attach':
+        onAttachClick();
+        return;
+      case 'image':
+        handleCreateImageMode();
+        return;
+      case 'new-chat':
+        createNewChat();
+        return;
+      default:
+        return;
+    }
+  }, [createNewChat, handleCreateImageMode, handleModeChange, onAttachClick]);
+
   const handleCycleModelMode = useCallback(() => {
     let nextMode = 'auto';
     let blockedPremiumMode = false;
@@ -1638,17 +1695,17 @@ export default function HomePage() {
       return;
     }
     if (tab === 'new_chat') {
-      createNewChat();
+      openMobileTools();
       return;
     }
     if (tab === 'tools') {
-      handleQuickAction('research');
+      openMobileTools();
       return;
     }
     if (tab === 'profile') {
       handleOpenSettings();
     }
-  }, [createNewChat, handleOpenSettings, handleQuickAction]);
+  }, [handleOpenSettings, openMobileTools]);
 
   // ===== Keydown =====
   const onKeyDown = useCallback((e) => {
@@ -1788,6 +1845,7 @@ export default function HomePage() {
                 composerMode={composerMode}
                 onComposerModeChange={setComposerMode}
                 onChatModeChange={handleModeChange}
+                inputRef={askInputRef}
                 fileInputRef={fileInputRef}
                 onImageChange={onImageChange}
                 selectedImage={selectedImage}
@@ -1863,10 +1921,52 @@ export default function HomePage() {
           )}
         </main>
 
-        {deviceType === 'mobile' && (
+        {deviceType === 'mobile' && mobileToolsOpen && (
+          <div className="mobile-tools-overlay" onClick={closeMobileTools}>
+            <div className="mobile-tools-popup" onClick={(event) => event.stopPropagation()}>
+              <button
+                className={`tool-popup-btn mode-btn ${chatMode === 'chat' && composerMode !== 'image' ? 'active' : ''}`}
+                type="button"
+                onClick={() => handleMobileToolSelect('chat')}
+              >
+                Chat Mode
+              </button>
+              <button
+                className={`tool-popup-btn mode-btn ${chatMode === 'search' && composerMode !== 'image' ? 'active' : ''}`}
+                type="button"
+                onClick={() => handleMobileToolSelect('search')}
+              >
+                Search Mode
+              </button>
+              <button
+                className={`tool-popup-btn mode-btn ${chatMode === 'research' && composerMode !== 'image' ? 'active' : ''}`}
+                type="button"
+                onClick={() => handleMobileToolSelect('research')}
+              >
+                Research Mode
+              </button>
+              <button className="tool-popup-btn" type="button" onClick={() => handleMobileToolSelect('attach')}>
+                Attach Image
+              </button>
+              <button
+                className={`tool-popup-btn mode-btn ${composerMode === 'image' ? 'active' : ''}`}
+                type="button"
+                onClick={() => handleMobileToolSelect('image')}
+              >
+                Create Image
+              </button>
+              <button className="tool-popup-btn" type="button" onClick={() => handleMobileToolSelect('new-chat')}>
+                New Chat
+              </button>
+            </div>
+          </div>
+        )}
+
+        {deviceType === 'mobile' && visibleMessages.length === 0 && !isLoading && !mobileToolsOpen && (
           <BottomNav
             activeTab={mobileTab}
             onTabSelect={handleBottomTabSelect}
+            user={user}
           />
         )}
       </div>
