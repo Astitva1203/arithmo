@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
-import { Camera, Check, Loader2, LogOut, X } from 'lucide-react';
+import { Camera, Check, Loader2, LogOut, Trash2, X } from 'lucide-react';
 import { resilientFetch } from '@/lib/resilientFetch';
 
 function planLabel(user) {
@@ -36,6 +36,7 @@ export default function SettingsModal({
   const [name, setName] = useState(user?.name || '');
   const [avatarSrc, setAvatarSrc] = useState(user?.avatar || null);
   const [loading, setLoading] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const fileInputRef = useRef(null);
@@ -105,6 +106,33 @@ export default function SettingsModal({
       setError(err.message || 'Failed to save settings.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    if (deleteLoading) return;
+
+    if (typeof window !== 'undefined') {
+      const firstConfirm = window.confirm('Delete your account? This permanently removes your data and cannot be undone.');
+      if (!firstConfirm) return;
+      const secondConfirm = window.confirm('This is permanent. Do you want to continue?');
+      if (!secondConfirm) return;
+    }
+
+    setDeleteLoading(true);
+    setError('');
+    setSuccess('');
+
+    try {
+      const res = await resilientFetch('/api/user/delete', { method: 'DELETE' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Failed to delete account.');
+      setSuccess('Account deleted. Redirecting...');
+      await onLogout?.();
+    } catch (err) {
+      setError(err.message || 'Failed to delete account.');
+    } finally {
+      setDeleteLoading(false);
     }
   };
 
@@ -221,6 +249,38 @@ export default function SettingsModal({
               <option value="deep">Deep</option>
               <option value="speed">Speed</option>
             </select>
+          </div>
+        </section>
+
+        <section style={{ borderTop: '1px solid var(--border-glass)', paddingTop: 16, marginTop: 16, display: 'grid', gap: 10 }}>
+          <div style={{ border: '1px solid rgba(239,68,68,0.35)', borderRadius: 12, padding: 12, background: 'rgba(239,68,68,0.08)', display: 'grid', gap: 8 }}>
+            <div>
+              <strong style={{ color: '#fecaca' }}>Delete account</strong>
+              <p style={{ margin: '6px 0 0', color: '#fca5a5', fontSize: '0.82rem', lineHeight: 1.5 }}>
+                Permanently removes your account, chats, and settings. This cannot be undone.
+              </p>
+            </div>
+            <button
+              onClick={handleDeleteAccount}
+              type="button"
+              disabled={deleteLoading}
+              style={{
+                padding: '10px 12px',
+                border: '1px solid rgba(239,68,68,0.5)',
+                background: 'rgba(239,68,68,0.12)',
+                color: '#fecaca',
+                cursor: 'pointer',
+                borderRadius: 10,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+                fontWeight: 700,
+              }}
+            >
+              {deleteLoading ? <Loader2 size={16} className="spin" /> : <Trash2 size={14} />}
+              Delete account
+            </button>
           </div>
         </section>
 

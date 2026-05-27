@@ -10,7 +10,7 @@ export async function POST(request) {
 
     return NextResponse.json({
       available: false,
-      message: 'Payments are currently disabled. Arithmo Pro will be available soon.',
+      message: 'Online payments are currently disabled. Arithmo Pro will be available soon.',
     });
   } catch (error) {
     if (error instanceof AuthError) return authErrorResponse(error);

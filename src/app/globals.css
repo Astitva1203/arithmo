@@ -5373,6 +5373,10 @@ button.list-card:hover {
   gap: 14px;
 }
 
+.payment-modal.contact {
+  width: min(560px, 100%);
+}
+
 .payment-modal h2 {
   margin: 0;
 }
@@ -5380,6 +5384,27 @@ button.list-card:hover {
 .payment-modal p {
   margin: 0;
   color: #b8c4dc;
+}
+
+.payment-modal a {
+  color: #93c5fd;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.payment-modal a:hover {
+  text-decoration: underline;
+}
+
+.payment-modal-actions {
+  display: grid;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.payment-modal-actions .pricing-primary-btn,
+.payment-modal-actions .pricing-secondary-btn {
+  width: 100%;
 }
 
 .payment-modal-close {
@@ -5392,6 +5417,11 @@ button.list-card:hover {
   border: 1px solid rgba(148, 163, 184, 0.24);
   background: rgba(255, 255, 255, 0.06);
   color: #e2e8f0;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  line-height: 0;
+  cursor: pointer;
 }
 
 [data-theme="light"] .attachment-menu-popup,

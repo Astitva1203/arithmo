@@ -16,6 +16,8 @@ const FEATURES = [
   ['Response speed', 'Standard', 'Priority'],
 ];
 
+const DEFAULT_PAYMENT_MESSAGE = 'Online payments are currently disabled. We are working on enabling subscriptions soon. Thank you for your patience.';
+
 function FeatureValue({ value }) {
   if (value === true) return <Check size={18} className="pricing-check" />;
   if (value === false) return <X size={18} className="pricing-x" />;
@@ -24,17 +26,23 @@ function FeatureValue({ value }) {
 
 export default function PricingPage() {
   const [modalOpen, setModalOpen] = useState(false);
-  const [message, setMessage] = useState('Payments are currently not available. We are working on enabling subscriptions soon. Thank you for your patience.');
+  const [contactModalOpen, setContactModalOpen] = useState(false);
+  const [message, setMessage] = useState(DEFAULT_PAYMENT_MESSAGE);
 
   const handleUpgrade = async () => {
     try {
       const res = await resilientFetch('/api/billing/checkout', { method: 'POST' });
       const data = await res.json().catch(() => ({}));
-      setMessage(data.message || 'Payments are currently not available. We are working on enabling subscriptions soon. Thank you for your patience.');
+      setMessage(data.message || DEFAULT_PAYMENT_MESSAGE);
     } catch {
-      setMessage('Payments are currently not available. We are working on enabling subscriptions soon. Thank you for your patience.');
+      setMessage(DEFAULT_PAYMENT_MESSAGE);
     }
     setModalOpen(true);
+  };
+
+  const handleContactOpen = () => {
+    setModalOpen(false);
+    setContactModalOpen(true);
   };
 
   return (
@@ -103,9 +111,34 @@ export default function PricingPage() {
             </button>
             <h2 id="payment-modal-title">Payments currently disabled</h2>
             <p>{message}</p>
-            <button className="pricing-primary-btn" type="button" onClick={() => setModalOpen(false)}>
-              Okay
+            <div className="payment-modal-actions">
+              <button className="pricing-secondary-btn" type="button" onClick={handleContactOpen}>
+                Contact for payments
+              </button>
+              <button className="pricing-primary-btn" type="button" onClick={() => setModalOpen(false)}>
+                Okay
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {contactModalOpen && (
+        <div className="payment-modal-backdrop" role="presentation" onClick={() => setContactModalOpen(false)}>
+          <div className="payment-modal contact" role="dialog" aria-modal="true" aria-labelledby="contact-modal-title" onClick={(event) => event.stopPropagation()}>
+            <button className="payment-modal-close" type="button" onClick={() => setContactModalOpen(false)} aria-label="Close">
+              <X size={18} />
             </button>
+            <h2 id="contact-modal-title">Contact for payments</h2>
+            <p>
+              Online payments are disabled, but you can still upgrade your plan by contacting us or email us at{' '}
+              <a href="mailto:techyou2026@gmail.com">techyou2026@gmail.com</a>. We will reply within 2 days.
+            </p>
+            <div className="payment-modal-actions">
+              <button className="pricing-primary-btn" type="button" onClick={() => setContactModalOpen(false)}>
+                Okay
+              </button>
+            </div>
           </div>
         </div>
       )}
