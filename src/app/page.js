@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -53,7 +53,7 @@ function fileToDataUrl(file) {
 function providerLabel(value) {
   const normalized = String(value || '').toLowerCase();
   if (normalized === 'groq') return 'Groq';
-  if (normalized === 'gemini') return 'Gemini';
+  if (normalized === 'nvidia' || normalized === 'nvidia_backup') return 'NVIDIA';
   if (normalized === 'nvidia') return 'NVIDIA';
   return 'Auto';
 }
@@ -61,7 +61,7 @@ function providerLabel(value) {
 function preferredProviderLabelFromModelMode(value) {
   const normalized = String(value || '').toLowerCase();
   if (normalized === 'fast') return 'Groq';
-  if (normalized === 'smart') return 'Gemini';
+  if (normalized === 'smart') return 'NVIDIA';
   if (normalized === 'deep') return 'NVIDIA';
   return 'Auto';
 }

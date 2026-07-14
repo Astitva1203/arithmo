@@ -5,7 +5,7 @@ import { Bell, Plus } from 'lucide-react';
 function modelModeLabel(value) {
   const normalized = String(value || 'auto').toLowerCase();
   if (normalized === 'fast') return 'Fast';
-  if (normalized === 'smart') return 'Smart';
+  if (normalized === 'smart') return '⚡ Smart';
   if (normalized === 'deep') return 'Deep';
   return 'Auto';
 }
@@ -51,7 +51,7 @@ export default function ChatHeader({
           {!user?.isLifetime && user?.isPremium && <span className="arithmo-plan-badge pro">Pro</span>}
 
           <button
-            className="arithmo-header-pill arithmo-model-pill"
+            className={`arithmo-header-pill arithmo-model-pill${modelMode === 'smart' ? ' smart-active' : ''}`}
             type="button"
             onClick={onCycleModelMode}
             aria-label="Switch model mode"
@@ -90,7 +90,7 @@ export default function ChatHeader({
 
         <div className="arithmo-mobile-header-actions">
           <button
-            className="arithmo-header-pill arithmo-model-pill mobile"
+            className={`arithmo-header-pill arithmo-model-pill mobile${modelMode === 'smart' ? ' smart-active' : ''}`}
             type="button"
             onClick={onCycleModelMode}
             aria-label="Switch model mode"

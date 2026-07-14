@@ -2,13 +2,20 @@ import {
   isGroqConfigured,
   groqSupportsVision,
   requestGroqChatStream,
+  getGroqModel,
 } from '@/services/ai/groqService';
 import {
-  isGeminiBackupConfigured,
-  isGeminiConfigured,
-  requestGeminiChatStream,
-} from '@/services/ai/geminiService';
-import { isNvidiaConfigured, requestNvidiaChatStream } from '@/services/ai/nvidiaService';
+  isNvidiaConfigured,
+  isNvidiaBackupConfigured,
+  requestNvidiaChatStream,
+  requestNvidiaSmartChatStream,
+  getNvidiaDeepModel,
+} from '@/services/ai/nvidiaService';
+import {
+  isOpenRouterConfigured,
+  requestOpenRouterChatStream,
+  getOpenRouterSmartModel,
+} from '@/services/ai/openrouterService';
 
 const COMPLEX_QUERY_PATTERN =
   /\b(why|prove|derive|optimi[sz]e|architecture|design|trade[\s-]?off|debug|analy[sz]e|reason|compare|evaluate|step by step|algorithm|system design|multi model|fallback|performance|latency|security)\b/i;
@@ -17,8 +24,20 @@ const SIMPLE_QUERY_PATTERN =
   /^\s*(hi|hello|hey|thanks|thank you|ok|yes|no|what is|who is|define|solve|answer|help)\b/i;
 
 const MODEL_MODE_VALUES = new Set(['auto', 'fast', 'smart', 'deep']);
-const LEGACY_PROVIDER_VALUES = new Set(['auto', 'groq', 'gemini', 'nvidia']);
-const FALLBACK_PROVIDER_ORDER = ['groq', 'gemini', 'gemini_backup', 'nvidia'];
+const LEGACY_PROVIDER_VALUES = new Set([
+  'auto', 'groq', 'nvidia', 'nvidia_smart', 'openrouter_smart',
+]);
+
+/**
+ * Fallback order:
+ *   openrouter_smart (DeepSeek, smart) → groq (fast) → nvidia (gpt-oss, deep) → nvidia_backup
+ */
+const FALLBACK_PROVIDER_ORDER = [
+  'openrouter_smart',
+  'groq',
+  'nvidia',
+  'nvidia_backup',
+];
 
 function normalizeProvider(value) {
   const provider = String(value || 'auto').trim().toLowerCase();
@@ -34,14 +53,14 @@ function normalizeModelMode(value) {
 
 function providerToMode(provider) {
   if (provider === 'groq') return 'fast';
-  if (provider === 'gemini') return 'smart';
+  if (provider === 'openrouter_smart' || provider === 'nvidia_smart') return 'smart';
   if (provider === 'nvidia') return 'deep';
   return 'auto';
 }
 
 function modeToPreferredProvider(mode) {
   if (mode === 'fast') return 'groq';
-  if (mode === 'smart') return 'gemini';
+  if (mode === 'smart') return 'openrouter_smart';
   if (mode === 'deep') return 'nvidia';
   return null;
 }
@@ -77,36 +96,62 @@ function isProviderAvailable(provider, { hasImageInput = false } = {}) {
   if (provider === 'groq') {
     return isGroqConfigured() && (!hasImageInput || groqSupportsVision());
   }
-  if (provider === 'gemini') {
-    return isGeminiConfigured();
+  if (provider === 'openrouter_smart') {
+    // DeepSeek V4 Flash via OpenRouter — text-only
+    return isOpenRouterConfigured() && !hasImageInput;
   }
-  if (provider === 'gemini_backup') {
-    return isGeminiBackupConfigured();
+  if (provider === 'nvidia_smart') {
+    // Gemma via NVIDIA NIM — text-only (legacy, kept for fallback)
+    return isNvidiaConfigured() && !hasImageInput;
   }
   if (provider === 'nvidia') {
-    // NVIDIA route currently handles text-only reliably in this app.
+    // GPT-OSS via NVIDIA NIM — text-only
     return isNvidiaConfigured() && !hasImageInput;
+  }
+  if (provider === 'nvidia_backup') {
+    return isNvidiaBackupConfigured() && !hasImageInput;
   }
   return false;
 }
 
 function getAvailableProviders(context) {
-  return ['groq', 'gemini', 'gemini_backup', 'nvidia'].filter((provider) =>
-    isProviderAvailable(provider, context)
-  );
+  return [
+    'openrouter_smart',
+    'groq',
+    'nvidia_smart',
+    'nvidia',
+    'nvidia_backup',
+  ].filter((provider) => isProviderAvailable(provider, context));
 }
 
 function chooseAutoProvider({
   hasImageInput = false,
   availableProviders,
+  complexity = 'medium',
 }) {
+  // Image input → Groq (supports vision)
   if (hasImageInput) {
     if (availableProviders.includes('groq')) return 'groq';
-    if (availableProviders.includes('gemini')) return 'gemini';
-    if (availableProviders.includes('gemini_backup')) return 'gemini_backup';
     return availableProviders[0] || null;
   }
 
+  // Complexity-based intelligent routing:
+  //   simple  → groq         (fast, low-latency)
+  //   medium  → openrouter   (smart, balanced)
+  //   complex → nvidia       (deep, high-quality reasoning)
+  if (complexity === 'simple') {
+    if (availableProviders.includes('groq')) return 'groq';
+    if (availableProviders.includes('openrouter_smart')) return 'openrouter_smart';
+  } else if (complexity === 'complex') {
+    if (availableProviders.includes('nvidia')) return 'nvidia';
+    if (availableProviders.includes('openrouter_smart')) return 'openrouter_smart';
+  } else {
+    // medium complexity → smart mode (balanced)
+    if (availableProviders.includes('openrouter_smart')) return 'openrouter_smart';
+    if (availableProviders.includes('groq')) return 'groq';
+  }
+
+  // Ultimate fallback: try any available provider
   for (const provider of FALLBACK_PROVIDER_ORDER) {
     if (availableProviders.includes(provider)) return provider;
   }
@@ -150,12 +195,39 @@ function resolveModelSelection({
         availableProviders,
       };
     }
-    if (preferredByMode === 'gemini' && availableProviders.includes('gemini_backup')) {
+    // Smart mode fallback: try nvidia_smart if openrouter is down
+    if (
+      preferredByMode === 'openrouter_smart' &&
+      availableProviders.includes('nvidia_smart')
+    ) {
       return {
-        provider: 'gemini_backup',
+        provider: 'nvidia_smart',
         modelModeUsed: inferredMode,
         complexity,
         routeReason: 'mode_override',
+        availableProviders,
+      };
+    }
+    // If nvidia_smart or nvidia is preferred but only nvidia_backup is available
+    if (
+      (preferredByMode === 'nvidia' || preferredByMode === 'nvidia_smart') &&
+      availableProviders.includes('nvidia_backup')
+    ) {
+      return {
+        provider: 'nvidia_backup',
+        modelModeUsed: inferredMode,
+        complexity,
+        routeReason: 'mode_override',
+        availableProviders,
+      };
+    }
+    // Smart mode: fall back to groq if nothing else is available
+    if (preferredByMode === 'openrouter_smart' && availableProviders.includes('groq')) {
+      return {
+        provider: 'groq',
+        modelModeUsed: inferredMode,
+        complexity,
+        routeReason: 'mode_fallback',
         availableProviders,
       };
     }
@@ -171,11 +243,15 @@ function resolveModelSelection({
   const autoProvider = chooseAutoProvider({
     hasImageInput,
     availableProviders,
+    complexity,
   });
+
+  // Reflect which mode auto actually chose
+  const autoModeUsed = autoProvider ? providerToMode(autoProvider) : 'auto';
 
   return {
     provider: autoProvider,
-    modelModeUsed: 'auto',
+    modelModeUsed: autoModeUsed !== 'auto' ? `auto->${autoModeUsed}` : 'auto',
     complexity,
     routeReason: 'auto_router',
     availableProviders,
@@ -222,16 +298,18 @@ function detectFailureType({ status = 0, errorText = '' }) {
 }
 
 async function callProvider(provider, args) {
+  if (provider === 'openrouter_smart') return requestOpenRouterChatStream(args);
   if (provider === 'groq') return requestGroqChatStream(args);
-  if (provider === 'gemini') return requestGeminiChatStream(args);
-  if (provider === 'gemini_backup') {
-    return requestGeminiChatStream({
+  if (provider === 'nvidia_smart') return requestNvidiaSmartChatStream(args);
+  if (provider === 'nvidia') return requestNvidiaChatStream(args);
+  if (provider === 'nvidia_backup') {
+    // Backup uses the deep model by default
+    return requestNvidiaChatStream({
       ...args,
-      apiKey: process.env.GEMINI_BACKUP_API_KEY,
-      apiKeyName: 'GEMINI_BACKUP_API_KEY',
+      apiKey: process.env.NVIDIA_BACKUP_API_KEY,
+      apiKeyName: 'NVIDIA_BACKUP_API_KEY',
     });
   }
-  if (provider === 'nvidia') return requestNvidiaChatStream(args);
   throw new Error('Unknown provider.');
 }
 
@@ -260,63 +338,23 @@ function buildProviderOrder(initialProvider, availableProviders = []) {
 }
 
 function pickAggregateFailureStatus(attempts = []) {
-  if (attempts.some((attempt) => attempt.failureType === 'auth_error')) {
-    return 401;
-  }
-  if (attempts.some((attempt) => attempt.failureType === 'api_limit')) {
-    return 429;
-  }
-  if (attempts.some((attempt) => attempt.failureType === 'rate_limit' || attempt.status === 429)) {
-    return 429;
-  }
-  if (attempts.some((attempt) => attempt.failureType === 'timeout' || attempt.status === 408)) {
-    return 504;
-  }
-  if (
-    attempts.some(
-      (attempt) =>
-        attempt.failureType === 'network_error' || attempt.failureType === 'service_unavailable'
-    )
-  ) {
-    return 503;
-  }
-  if (attempts.some((attempt) => Number(attempt.status) >= 500 || Number(attempt.status) === 0)) {
-    return 503;
-  }
+  if (attempts.some((a) => a.failureType === 'auth_error')) return 401;
+  if (attempts.some((a) => a.failureType === 'api_limit')) return 429;
+  if (attempts.some((a) => a.failureType === 'rate_limit' || a.status === 429)) return 429;
+  if (attempts.some((a) => a.failureType === 'timeout' || a.status === 408)) return 504;
+  if (attempts.some((a) => a.failureType === 'network_error' || a.failureType === 'service_unavailable')) return 503;
+  if (attempts.some((a) => Number(a.status) >= 500 || Number(a.status) === 0)) return 503;
   return 502;
 }
 
 function buildClientFailureMessage(attempts = []) {
-  if (!attempts.length) {
-    return 'Arithmo AI is temporarily busy. Please try again in a few seconds.';
-  }
-
-  if (attempts.some((attempt) => attempt.failureType === 'auth_error')) {
-    return 'Authentication issue detected.';
-  }
-  if (attempts.some((attempt) => attempt.failureType === 'rate_limit' || attempt.status === 429)) {
-    return 'Too many requests. Please wait a moment.';
-  }
-  if (attempts.some((attempt) => attempt.failureType === 'api_limit')) {
-    return 'Service limit reached temporarily.';
-  }
-  if (attempts.some((attempt) => attempt.failureType === 'timeout')) {
-    return 'Request took too long.';
-  }
-  if (attempts.some((attempt) => attempt.failureType === 'network_error')) {
-    return 'Connection problem detected.';
-  }
-  if (
-    attempts.some(
-      (attempt) =>
-        attempt.failureType === 'service_unavailable' ||
-        Number(attempt.status) >= 500 ||
-        Number(attempt.status) === 0
-    )
-  ) {
-    return 'Arithmo AI is temporarily busy.';
-  }
-
+  if (!attempts.length) return 'Arithmo AI is temporarily busy. Please try again in a few seconds.';
+  if (attempts.some((a) => a.failureType === 'auth_error')) return 'Authentication issue detected.';
+  if (attempts.some((a) => a.failureType === 'rate_limit' || a.status === 429)) return 'Too many requests. Please wait a moment.';
+  if (attempts.some((a) => a.failureType === 'api_limit')) return 'Service limit reached temporarily.';
+  if (attempts.some((a) => a.failureType === 'timeout')) return 'Request took too long.';
+  if (attempts.some((a) => a.failureType === 'network_error')) return 'Connection problem detected.';
+  if (attempts.some((a) => a.failureType === 'service_unavailable' || Number(a.status) >= 500 || Number(a.status) === 0)) return 'Arithmo AI is temporarily busy.';
   return 'Arithmo AI is temporarily busy. Please try again in a few seconds.';
 }
 
@@ -408,14 +446,13 @@ export async function routeChatRequest({
       );
     }
 
-    throw new AiRouterError('No AI provider configured. Add GROQ_API_KEY, GEMINI_API_KEY, or NVIDIA_API_KEY.', {
+    throw new AiRouterError('No AI provider configured. Add OPENROUTER_API_KEY, GROQ_API_KEY, or NVIDIA_API_KEY.', {
       status: 500,
       details: [{ provider: 'none', reason: 'missing_api_keys' }],
       metadata: {
         modelMode: selection.modelModeUsed,
         complexity: selection.complexity,
-        clientMessage:
-          'No AI provider is configured. Add GROQ_API_KEY, GEMINI_API_KEY, GEMINI_BACKUP_API_KEY, or NVIDIA_API_KEY.',
+        clientMessage: 'No AI provider is configured. Please contact support.',
       },
     });
   }
@@ -444,6 +481,16 @@ export async function routeChatRequest({
       }
 
       if (response.ok && response.body) {
+        console.error({
+          mode: modelMode,
+          provider,
+          model: provider === 'openrouter_smart' ? getOpenRouterSmartModel()
+              : provider === 'groq' ? getGroqModel()
+              : (provider === 'nvidia' || provider === 'nvidia_backup') ? getNvidiaDeepModel()
+              : provider,
+          responseTimeMs: Date.now() - callStart,
+        });
+
         return {
           providerUsed: provider,
           primaryProvider: initialProvider,
@@ -461,6 +508,9 @@ export async function routeChatRequest({
 
       const providerError = await readResponseError(response);
       const status = response.status && Number(response.status) > 0 ? Number(response.status) : 502;
+
+      console.error({ provider, error: `Provider returned HTTP ${status}` });
+
       attempts.push({
         provider,
         attempt: attempts.length + 1,
@@ -470,9 +520,7 @@ export async function routeChatRequest({
         elapsedMs: Date.now() - callStart,
       });
     } catch (error) {
-      if (error instanceof AiRouterError && error.status === 499) {
-        throw error;
-      }
+      if (error instanceof AiRouterError && error.status === 499) throw error;
 
       if (signal?.aborted || isAbortLikeError(error)) {
         throw new AiRouterError('Request cancelled by client.', {
@@ -483,6 +531,8 @@ export async function routeChatRequest({
       }
 
       const message = error?.message || 'Unknown request failure.';
+      console.error({ provider, error: message });
+
       attempts.push({
         provider,
         attempt: attempts.length + 1,

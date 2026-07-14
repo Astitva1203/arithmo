@@ -174,11 +174,13 @@ export function assertPremiumFeature(user, feature, requestedValue) {
   const planInfo = normalizePlan(user);
   if (planInfo.isPremium) return;
 
-  if (feature === 'modelMode' && ['smart', 'deep'].includes(String(requestedValue || '').toLowerCase())) {
+  // Smart Mode is free for all users (uses DeepSeek V4 Flash free tier)
+  // Only Deep Mode requires Pro
+  if (feature === 'modelMode' && String(requestedValue || '').toLowerCase() === 'deep') {
     throw new AccessError({
       code: 'PREMIUM_REQUIRED',
-      feature: requestedValue === 'deep' ? 'Deep Mode' : 'Smart Mode',
-      message: `${requestedValue === 'deep' ? 'Deep Mode' : 'Smart Mode'} is a Pro feature. Upgrade to continue.`,
+      feature: 'Deep Mode',
+      message: 'Deep Mode is a Pro feature. Upgrade to continue.',
     });
   }
 
@@ -194,13 +196,20 @@ export function assertPremiumFeature(user, feature, requestedValue) {
 export function getEffectiveModelMode(user, requestedMode) {
   const planInfo = normalizePlan(user);
   if (planInfo.isPremium) return requestedMode || 'auto';
-  return 'fast';
+  // Free users can use auto, fast, and smart (DeepSeek free tier)
+  // Only deep mode is restricted to Pro
+  const mode = String(requestedMode || 'auto').toLowerCase();
+  if (mode === 'deep') return 'fast';
+  return mode;
 }
 
 export function getEffectiveProvider(user, requestedProvider) {
   const planInfo = normalizePlan(user);
   if (planInfo.isPremium) return requestedProvider || 'auto';
-  return 'groq';
+  // Free users can use auto, groq, and openrouter_smart
+  const provider = String(requestedProvider || 'auto').toLowerCase();
+  if (provider === 'nvidia' || provider === 'nvidia_smart' || provider === 'nvidia_backup') return 'groq';
+  return provider;
 }
 
 export async function incrementUsageOrThrow(db, { user, userId, units }) {

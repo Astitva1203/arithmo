@@ -10,7 +10,7 @@ const FEATURES = [
   ['Search queries', '3/day', 'Unlimited'],
   ['Research mode', '1/day', 'Unlimited'],
   ['Deep Mode NVIDIA', false, true],
-  ['Smart Mode Gemini', false, true],
+  ['Smart Mode NVIDIA', false, true],
   ['Image generation', '3/day', 'Extended'],
   ['Advanced learning tools', false, true],
   ['Response speed', 'Standard', 'Priority'],
@@ -76,7 +76,7 @@ export default function PricingPage() {
           <ul>
             <li>Unlimited chats, search, and research</li>
             <li>Deep Mode with NVIDIA</li>
-            <li>Smart Mode with Gemini</li>
+            <li>Smart Mode with NVIDIA</li>
             <li>Advanced learning features</li>
           </ul>
           <button className="pricing-primary-btn" type="button" onClick={handleUpgrade}>

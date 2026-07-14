@@ -12,8 +12,8 @@ import {
 } from '@/lib/billing';
 import { AiRouterError, routeChatRequest } from '@/router/aiRouter';
 import { isGroqConfigured, requestGroqChatCompletion } from '@/services/ai/groqService';
-import { isGeminiConfigured, requestGeminiChatCompletion } from '@/services/ai/geminiService';
-import { isNvidiaConfigured, requestNvidiaChatCompletion } from '@/services/ai/nvidiaService';
+import { isNvidiaConfigured, isNvidiaBackupConfigured, requestNvidiaChatCompletion } from '@/services/ai/nvidiaService';
+import { isOpenRouterConfigured, requestOpenRouterChatCompletion } from '@/services/ai/openrouterService';
 import {
   formatSearchResultsForPrompt,
   formatSourcesMarkdown,
@@ -78,7 +78,7 @@ Rules:
 - Output only the improved title`;
 
 const MAX_MESSAGES = Number(process.env.MAX_MESSAGES_PER_CHAT || 0);
-const MAX_MESSAGE_LENGTH = 2_000;
+const MAX_MESSAGE_LENGTH = 50_000;
 const MAX_IMAGE_DATA_URL_LENGTH = 6_000_000;
 const MAX_IMAGES_PER_REQUEST = 5;
 const TITLE_REFINE_MIN_USER_MESSAGES = 2;
@@ -452,8 +452,9 @@ function normalizeProvider(value) {
   const provider = String(value || 'auto').trim().toLowerCase();
   if (
     provider === 'groq' ||
-    provider === 'gemini' ||
     provider === 'nvidia' ||
+    provider === 'nvidia_smart' ||
+    provider === 'openrouter_smart' ||
     provider === 'auto'
   ) {
     return provider;
@@ -540,21 +541,29 @@ function normalizeTitleForCompare(title) {
 
 function resolveTitleProvider(preferredProvider) {
   const preferred = normalizeProvider(preferredProvider);
+  if (preferred === 'openrouter_smart' && isOpenRouterConfigured()) return 'openrouter';
   if (preferred === 'groq' && isGroqConfigured()) return 'groq';
-  if (preferred === 'gemini' && isGeminiConfigured()) return 'gemini';
-  if (preferred === 'nvidia' && isNvidiaConfigured()) return 'nvidia';
+  if ((preferred === 'nvidia' || preferred === 'nvidia_smart') && isNvidiaConfigured()) return 'nvidia';
   if (isGroqConfigured()) return 'groq';
-  if (isGeminiConfigured()) return 'gemini';
+  if (isOpenRouterConfigured()) return 'openrouter';
   if (isNvidiaConfigured()) return 'nvidia';
+  if (isNvidiaBackupConfigured()) return 'nvidia_backup';
   return null;
 }
 
 async function completeWithProvider(provider, payload) {
-  if (provider === 'gemini') {
-    return requestGeminiChatCompletion(payload);
+  if (provider === 'openrouter') {
+    return requestOpenRouterChatCompletion(payload);
   }
   if (provider === 'nvidia') {
     return requestNvidiaChatCompletion(payload);
+  }
+  if (provider === 'nvidia_backup') {
+    return requestNvidiaChatCompletion({
+      ...payload,
+      apiKey: process.env.NVIDIA_BACKUP_API_KEY,
+      apiKeyName: 'NVIDIA_BACKUP_API_KEY',
+    });
   }
   return requestGroqChatCompletion(payload);
 }
@@ -1041,7 +1050,7 @@ export async function POST(request) {
         hasImageInput,
         chatMode: effectiveChatMode,
         responseMode,
-        timeoutMs: 75_000,
+        timeoutMs: 300_000,
         signal: requestSignal,
       });
     } catch (error) {
@@ -1121,6 +1130,9 @@ export async function POST(request) {
               const trimmed = line.trim();
               if (!trimmed) continue;
 
+              // Skip SSE comment lines (e.g. ': OPENROUTER PROCESSING' keep-alive heartbeats)
+              if (trimmed.startsWith(':')) continue;
+
               if (trimmed.startsWith('data:')) {
                 const payload = trimmed.slice(5).trim();
                 if (!payload || payload === '[DONE]') continue;
@@ -1132,13 +1144,19 @@ export async function POST(request) {
                     controller.enqueue(encoder.encode(token));
                   }
                 } catch {
-                  fullResponse += payload;
-                  controller.enqueue(encoder.encode(payload));
+                  // Only forward if it looks like actual content, not SSE metadata
+                  if (payload && !payload.startsWith('{') && !payload.startsWith('[')) {
+                    fullResponse += payload;
+                    controller.enqueue(encoder.encode(payload));
+                  }
                 }
                 continue;
               }
 
-              // Fallback for non-SSE text chunks
+              // Skip lines that look like SSE metadata (event:, id:, retry:)
+              if (/^(event|id|retry)\s*:/i.test(trimmed)) continue;
+
+              // Fallback for non-SSE text chunks — only forward actual content
               fullResponse += trimmed;
               controller.enqueue(encoder.encode(trimmed));
             }
@@ -1146,7 +1164,10 @@ export async function POST(request) {
 
           if (buffer.trim()) {
             const pending = buffer.trim();
-            if (pending.startsWith('data:')) {
+            // Skip SSE comments and metadata in remaining buffer
+            if (pending.startsWith(':') || /^(event|id|retry)\s*:/i.test(pending)) {
+              // Ignore SSE comment/metadata
+            } else if (pending.startsWith('data:')) {
               const payload = pending.slice(5).trim();
               if (payload && payload !== '[DONE]') {
                 try {
@@ -1157,8 +1178,10 @@ export async function POST(request) {
                     controller.enqueue(encoder.encode(token));
                   }
                 } catch {
-                  fullResponse += payload;
-                  controller.enqueue(encoder.encode(payload));
+                  if (payload && !payload.startsWith('{') && !payload.startsWith('[')) {
+                    fullResponse += payload;
+                    controller.enqueue(encoder.encode(payload));
+                  }
                 }
               }
             } else {
@@ -1318,7 +1341,7 @@ export async function POST(request) {
                 });
 
                 let nextTitle = chat.title || 'New Chat';
-                if (userCount >= TITLE_REFINE_MIN_USER_MESSAGES) {
+                if (userCount > 0 && userCount % 3 === 0) {
                   const recentUserMessages = await db.collection('messages')
                     .find({ chatId, role: 'user' })
                     .sort({ timestamp: -1 })

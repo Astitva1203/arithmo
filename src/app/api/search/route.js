@@ -15,8 +15,8 @@ export async function POST(request) {
     if (!query) {
       return NextResponse.json({ error: 'Query is required.' }, { status: 400 });
     }
-    if (query.length > 2000) {
-      return NextResponse.json({ error: 'Query is too long. Please keep it under 2000 characters.' }, { status: 400 });
+    if (query.length > 50000) {
+      return NextResponse.json({ error: 'Query is too long. Please keep it under 50000 characters.' }, { status: 400 });
     }
 
     const db = await getDb();

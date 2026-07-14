@@ -145,7 +145,7 @@ export default function ChatComposer({
           onKeyDown={onKeyDown}
           placeholder={composerMode === 'image' ? 'Describe the image you want...' : 'Ask anything'}
           rows={1}
-          maxLength={4000}
+          maxLength={50000}
           className="pill-input"
         />
 

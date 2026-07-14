@@ -27,8 +27,7 @@ export default function PrivacyPage() {
         <p>Arithmo AI may send prompts, images, or search queries to configured service providers only as needed to generate responses or perform requested features.</p>
         <ul>
           <li><strong>Groq API:</strong> Fast AI chat responses.</li>
-          <li><strong>Google Gemini API:</strong> Balanced intelligence and multimodal reasoning when configured.</li>
-          <li><strong>NVIDIA API:</strong> Deep reasoning responses when configured.</li>
+          <li><strong>NVIDIA NIM API:</strong> Deep reasoning and intelligent fallback responses via GPT-OSS-120B.</li>
           <li><strong>SerpAPI:</strong> Real-time web search for Search and Research modes when configured.</li>
           <li><strong>Freepik API:</strong> Image generation when configured.</li>
         </ul>
